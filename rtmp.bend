@@ -73,8 +73,10 @@ def Rtmp.loop(fuel: Nat, e: K.Ev, +st: K.Dec, +buf: List<&2, U32>, s: Socket, f:
       N.Conn.close(s, f, Done{p})
     case 1n+q K.Media{typ, ts, payload, +st2, +rest}:
       +tag = K.Flv.tag(typ, ts, payload)
-      N.Conn.save(tag, s, f, s2 => f2 => Rtmp.loop(q, K.Rtmp.event(st2, rest), st2, rest,
-        s2, f2, until, rx, acked, N.Pulled.add(p, 1, B.Bytes.len(tag))))
+      N.Conn.save(tag, s, f, s2 => f2 => N.Conn.due(until, s2, f2,
+        N.Pulled.add(p, 1, B.Bytes.len(tag)), s3 => f3 => p3 => N.Conn.close(s3, f3, Done{p3}),
+        s3 => f3 => p3 => Rtmp.loop(q, K.Rtmp.event(st2, rest), st2, rest, s3, f3, until,
+          rx, acked, p3)))
     case 1n+q K.Ping{data, +st2, +rest}:
       N.Conn.send(s, K.Rtmp.pong(data), s2 => Rtmp.loop(q, K.Rtmp.event(st2, rest), st2,
         rest, s2, f, until, rx, acked, p))

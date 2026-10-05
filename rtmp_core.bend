@@ -358,7 +358,7 @@ def Rtmp.chunk(st: Dec, buf: List<&2, U32>) -> Step:
 
 # Wait: more bytes are needed. Skip: nothing to act on. Result and
 # Error answer a command. Start, Over and Refused are the stream's
-# status. Media is audio (8), video (9) or data (18). Ping asks for a
+# status. Media is audio (8), video (9) or the metadata (18). Ping asks for a
 # pong with the same bytes.
 type Ev is Data:
   Wait{}
@@ -425,16 +425,28 @@ def Ev.data(yes: Bool, p: List<&2, U32>) -> List<&2, U32>:
     case _ p:
       p
 
-def Ev.typed(media: Bool, cmd: Bool, user: Bool, +typ: U32, ts: U32,
+# Of the data messages only the metadata goes to the file: servers
+# also send their own notes as data (a sample-access flag, a status),
+# and a reader of FLV takes each for a stream of its own.
+def Ev.script(p: List<&2, U32>, ts: U32, st: Dec, rest: List<&2, U32>) -> Ev:
+  match p:
+    case Con{2, Con{0, Con{10, Con{111, Con{110, Con{77, t}}}}}}:
+      Media{18, ts, 2 <> 0 <> 10 <> 111 <> 110 <> 77 <> t, st, rest}
+    case _:
+      Skip{st, rest}
+
+def Ev.typed(media: Bool, data: Bool, cmd: Bool, user: Bool, typ: U32, ts: U32,
   p: List<&2, U32>, st: Dec, rest: List<&2, U32>) -> Ev:
-  match media cmd user:
-    case True{} _ _:
-      Media{typ, ts, Ev.data(U32.is_eq(typ, 18), p), st, rest}
-    case False{} True{} _:
+  match media data cmd user:
+    case True{} _ _ _:
+      Media{typ, ts, p, st, rest}
+    case False{} True{} _ _:
+      Ev.script(Ev.data(True{}, p), ts, st, rest)
+    case False{} False{} True{} _:
       Ev.command(A.Amf.of(p), st, rest)
-    case False{} False{} True{}:
+    case False{} False{} False{} True{}:
       Ev.user(p, st, rest)
-    case False{} False{} False{}:
+    case False{} False{} False{} False{}:
       Skip{st, rest}
 
 def Ev.of(s: Step) -> Ev:
@@ -444,7 +456,7 @@ def Ev.of(s: Step) -> Ev:
     case Part{st, rest}:
       Skip{st, rest}
     case Msg{+typ, ts, _, p, st, rest}:
-      Ev.typed(U32.is_eq(typ, 8) || U32.is_eq(typ, 9) || U32.is_eq(typ, 18),
+      Ev.typed(U32.is_eq(typ, 8) || U32.is_eq(typ, 9), U32.is_eq(typ, 18),
         U32.is_eq(typ, 20), U32.is_eq(typ, 4), typ, ts, p, st, rest)
 
 # The next event of a buffer.

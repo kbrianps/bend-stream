@@ -167,7 +167,10 @@ def Rtsp.loop(fuel: Nat, m: C.Msg, buf: List<&2, U32>, s: Socket, f: File,
       Rtsp.finish(s, f, c, cseq, Done{p})
     case 1n+q C.Frame{chan, data, +rest}:
       Rtsp.frame(Cfg.units(c, chan, data, st), s, f, p, s2 => f2 => st2 => p2 =>
-        Rtsp.loop(q, C.Rtsp.demux(rest), rest, s2, f2, st2, c, ka, cseq, p2))
+        N.Conn.due(Cfg.until(c), s2, f2, p2,
+          s3 => f3 => p3 => Rtsp.finish(s3, f3, c, cseq, Done{p3}),
+          s3 => f3 => p3 => Rtsp.loop(q, C.Rtsp.demux(rest), rest, s3, f3, st2, c, ka,
+            cseq, p3)))
     case 1n+q C.Reply{_, +rest}:
       Rtsp.loop(q, C.Rtsp.demux(rest), rest, s, f, st, c, ka, cseq, p)
     case 1n+q C.Bad{}:

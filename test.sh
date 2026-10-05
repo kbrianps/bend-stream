@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The tests: the laws, then both clients against a local mediamtx fed by
 # ffmpeg. Needs mediamtx (in PATH, ~/bin, or $MEDIAMTX), ffmpeg and ffprobe.
+# OTHERS=1 adds SRS and nginx-rtmp, which need Docker.
 cd "$(dirname "$0")" || exit 1
 BEND=${BEND:-bend}
 MTX=${MEDIAMTX:-$(command -v mediamtx || echo "$HOME/bin/mediamtx")}
@@ -92,5 +93,23 @@ pull "rtmp: audio" rtmp://127.0.0.1:11935/open e.flv aac a
 pull "rtmp: a login in the query" "rtmp://127.0.0.1:11935/priv?user=cam&pass=s3gredo" f.flv h264
 fails "rtmp: no login" rtmp://127.0.0.1:11935/priv "closed"
 fails "rtmp: nothing listening" rtmp://127.0.0.1:11999/x "connect"
+
+# OTHERS=1: the same RTMP pull from two other servers, in Docker.
+if [ -n "$OTHERS" ]; then
+  docker run -d --rm --name bs-srs -p 11936:1935 ossrs/srs:5 > /dev/null
+  docker run -d --rm --name bs-nginx -p 11937:1935 tiangolo/nginx-rtmp > /dev/null
+  trap 'kill $pids 2>/dev/null; docker stop bs-srs bs-nginx > /dev/null 2>&1; rm -rf "$T"' EXIT
+  sleep 4
+  for port in 11936 11937; do
+    ffmpeg $SRC -f lavfi -i sine=frequency=440:sample_rate=44100 $X264 -c:a aac -b:a 64k \
+      -f flv rtmp://127.0.0.1:$port/live/cam > /dev/null 2>&1 &
+    pids="$pids $!"
+  done
+  sleep 4
+  pull "rtmp: SRS, video" rtmp://127.0.0.1:11936/live/cam g.flv h264
+  pull "rtmp: SRS, audio" rtmp://127.0.0.1:11936/live/cam h.flv aac a
+  pull "rtmp: nginx-rtmp, video" rtmp://127.0.0.1:11937/live/cam i.flv h264
+  pull "rtmp: nginx-rtmp, audio" rtmp://127.0.0.1:11937/live/cam j.flv aac a
+fi
 
 [ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

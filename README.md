@@ -30,7 +30,7 @@ ok: H264, 144 packets, 520 units, 142543 bytes
 
 - The plain handshake, the chunk stream in both directions (all four header types, extended timestamps, Set Chunk Size), AMF0.
 - `connect`, `createStream`, `play`; answers pings and sends acknowledgements.
-- Writes the audio, video and metadata messages as an FLV file, whatever codecs the server sends.
+- Writes the audio and video messages and the metadata as an FLV file, whatever codecs the server sends.
 - A login goes in the URL's query (`rtmp://host/app?user=...&pass=...`), as the servers that use one expect.
 
 ## From your own program
@@ -76,7 +76,9 @@ The result is `Done{Pulled{packets, units, bytes, kind}}` or `Fail{(code, messag
 ./test.sh
 ```
 
-It proves the laws, starts a local [mediamtx](https://github.com/bluenviron/mediamtx) fed by `ffmpeg`, records from it over both protocols and checks each file with `ffprobe`. It needs `mediamtx`, `ffmpeg` and `ffprobe`. `AUTH=basic ./test.sh` runs it with Basic instead of Digest.
+It proves the laws, starts a local [mediamtx](https://github.com/bluenviron/mediamtx) fed by `ffmpeg`, records from it over both protocols and checks each file with `ffprobe`. It needs `mediamtx`, `ffmpeg` and `ffprobe`. `AUTH=basic ./test.sh` runs it with Basic instead of Digest, and `OTHERS=1 ./test.sh` adds an RTMP pull from SRS and from nginx-rtmp (in Docker).
+
+Beyond the script, the RTSP client was run against real recorders: an Intelbras MHDX DVR and a Hikvision DS-7632NXI-K2 NVR in H.264, and a camera in H.265.
 
 ## Limits
 
@@ -85,7 +87,7 @@ It proves the laws, starts a local [mediamtx](https://github.com/bluenviron/medi
 - RTSP: only RTP over the RTSP connection (no UDP), and only the video stream.
 - RTMP: playing only, no publishing. A missing stream or a missing login shows as "the server closed the connection".
 - The FLV keeps the server's timestamps, so it may not start at zero.
-- A read has no timeout: a server that goes silent is waited on.
+- A read has no timeout: a server that goes silent is waited on, and so is an RTMP server that holds a player until someone publishes (SRS and nginx-rtmp do). Base has no byte-safe read with a deadline, and no way to cancel one.
 - Bytes are linked lists in Bend: expect about 280 MB of memory for a 640x360 stream.
 
 Tested with Bend 2.0.35.

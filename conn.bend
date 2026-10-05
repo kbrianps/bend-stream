@@ -92,3 +92,20 @@ def Conn.close(s: Socket, f: File, r: Out()) -> IO(Out()):
     File.close(f)
     Socket.close(s)
     IO.pure(Out(), r)
+
+def Conn.due.at(late: Bool, s: Socket, f: File, p: Pulled,
+  stop: Socket -> File -> Pulled -> IO(Out()),
+  go: Socket -> File -> Pulled -> IO(Out())) -> IO(Out()):
+  match late:
+    case True{}:
+      stop(s, f, p)
+    case False{}:
+      go(s, f, p)
+
+# stop when the clock (IO.now's, ms) has reached until, else go.
+def Conn.due(until: Nat, s: Socket, f: File, p: Pulled,
+  stop: Socket -> File -> Pulled -> IO(Out()),
+  go: Socket -> File -> Pulled -> IO(Out())) -> IO(Out()):
+  do IO<Out()>:
+    now : Nat <- IO.now()
+    Conn.due.at(Nat.is_le(until, now), s, f, p, stop, go)
