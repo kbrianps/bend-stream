@@ -31,6 +31,11 @@ def Opts.ca(o: Opts, path: String) -> Opts:
   Opts{url, user, pass, wait, audio, _} = o
   Opts{url, user, pass, wait, audio, path}
 
+# The same options for another address.
+def Opts.to(o: Opts, url: String) -> Opts:
+  Opts{_, user, pass, wait, audio, ca} = o
+  Opts{url, user, pass, wait, audio, ca}
+
 def Opts.wait.of(o: Opts) -> U32:
   Opts{_, _, _, w, _, _} = o
   w
@@ -49,7 +54,9 @@ def Opts.ca.of(o: Opts) -> String:
 # Why something failed, for a program to act on: try again later
 # (NoRoute, Silent, Hangup), ask for another password (NoLogin), give up
 # (NoStream, Unsafe, Refused, Garbled, BadUrl). Ended is no failure:
-# the stream came to its end.
+# the stream came to its end. Moved is what a redirect is inside the
+# client, its words the new address; open follows it, so a program sees
+# it only after too many in a row.
 type Why is Data:
   NoRoute{}
   Unsafe{}
@@ -61,6 +68,7 @@ type Why is Data:
   Garbled{}
   BadUrl{}
   Ended{}
+  Moved{}
 
 # An error: why, the system's or the server's code (0 for none), and
 # words for a person.
@@ -89,6 +97,8 @@ def Why.name(w: Why) -> String:
       "bad URL"
     case Ended{}:
       "stream ended"
+    case Moved{}:
+      "moved"
 
 def Why.ended(w: Why) -> Bool:
   match w:
@@ -127,6 +137,14 @@ def Why.lasting(w: Why) -> Bool:
 def Err.lasting(e: Err) -> Bool:
   Err{why, _, _} = e
   Why.lasting(why)
+
+def Err.moved(e: Err) -> Bool:
+  Err{why, _, _} = e
+  match why:
+    case Moved{}:
+      True{}
+    case _:
+      False{}
 
 def Err.again(e: Err) -> Bool:
   Err{why, _, _} = e

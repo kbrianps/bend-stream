@@ -81,3 +81,9 @@ def Laws.g711_by_number():
 
 def Laws.give_up_only_on_what_lasts():
   {==}
+
+def Laws.sha256_vectors():
+  {==}
+
+def Laws.digest_rfc7616():
+  {==}

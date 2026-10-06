@@ -277,6 +277,20 @@ def Rtsp.words(+code: U32) -> String:
 def Rtsp.refused(s: Socket, +code: U32) -> IO(Fin()):
   N.Conn.fail(End, s, Rtsp.why(code), code, Rtsp.words(code))
 
+# A reply that is neither the description nor a challenge: a redirect
+# (a 3xx with a Location) ends as Moved, its words the new address, for
+# open to follow; anything else is a refusal.
+def Rtsp.other(moved: Bool, s: Socket, code: U32, to: String) -> IO(Fin()):
+  match moved:
+    case True{}:
+      N.Conn.fail(End, s, E.Moved{}, code, to)
+    case False{}:
+      Rtsp.refused(s, code)
+
+def Rtsp.other.of(s: Socket, +code: U32, +to: String) -> IO(Fin()):
+  Rtsp.other((code >= 300 && code < 400 : U32) && Bool.not(String.is_empty(to)), s, code,
+    to)
+
 def Rtsp.again.got(ok: Bool, +r: C.Resp, s: Socket, buf: List<&2, U32>, uri: String,
   chal: C.Chal, user: String, pass: String, cnonce: String, o: E.Opts) -> IO(Fin()):
   match ok:
@@ -313,7 +327,7 @@ def Rtsp.first.got(ok: Bool, login: Bool, +r: C.Resp, s: Socket, buf: List<&2, U
       Rtsp.again.with(C.Chal.pick(C.Chal.all(C.Hdr.all(C.Resp.headers(r),
         "www-authenticate"))), s, buf, uri, user, pass, cnonce, o)
     case False{} False{}:
-      Rtsp.refused(s, C.Resp.code(r))
+      Rtsp.other.of(s, C.Resp.code(r), String.trim(C.Resp.get(r, "location")))
 
 # DESCRIBE with no login first: a 401 names the challenge to answer.
 def Rtsp.describe(s: Socket, +uri: String, +user: String, +pass: String,
@@ -383,12 +397,37 @@ def Rtsp.next.end(r: Fin()) -> Read():
     case Fail{e}:
       Fail{e}
 
-# Open a session: connect, log in, set the streams up and play. On a
-# failure the connection is already closed.
+def Rtsp.open.moved(moved: Bool, +e: E.Err, o: E.Opts, again: E.Opts -> IO(Opened())) ->
+  IO(Opened()):
+  match moved:
+    case True{}:
+      E.Err{_, _, to} = e
+      again(E.Opts.to(o, to))
+    case False{}:
+      IO.pure(Opened(), Fail{e})
+
+def Rtsp.open.got(r: Opened(), o: E.Opts, again: E.Opts -> IO(Opened())) -> IO(Opened()):
+  match r:
+    case Done{s}:
+      IO.pure(Opened(), Done{s})
+    case Fail{+e}:
+      Rtsp.open.moved(E.Err.moved(e), e, o, again)
+
+# A server may send the client elsewhere (301, 302): up to hops times.
+def Rtsp.open.at(hops: Nat, +o: E.Opts) -> IO(Opened()):
+  match hops:
+    case 0n:
+      IO.pure(Opened(), Fail{E.Err{E.Moved{}, 0, "too many redirects"}})
+    case 1n+p:
+      do IO<Opened()>:
+        r : Fin() <- Rtsp.start(o)
+        Rtsp.open.got(Rtsp.open.end(r), o, o2 => Rtsp.open.at(p, o2))
+
+# Open a session: connect, log in, set the streams up and play,
+# following a redirect if the server answers with one. On a failure the
+# connection is already closed.
 def Rtsp.open(o: E.Opts) -> IO(Opened()):
-  do IO<Opened()>:
-    r : Fin() <- Rtsp.start(o)
-    IO.pure(Opened(), Rtsp.open.end(r))
+  Rtsp.open.at(5n, o)
 
 def Rtsp.reopen.end(r: Opened(), rest: IO(Opened())) -> IO(Opened()):
   match r:

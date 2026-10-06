@@ -23,7 +23,8 @@ ok: H264, 125 frames, 142543 bytes
 **RTSP** (RFC 2326)
 
 - `DESCRIBE`, `SETUP`, `PLAY`, `GET_PARAMETER` as keep-alive at half the session's timeout, `TEARDOWN`.
-- Basic and Digest (MD5) authentication, from the user and password in the URL.
+- Basic and Digest authentication (MD5, and SHA-256 of RFC 7616), from the user and password in the URL or the options.
+- Follows a redirect (a 3xx with a `Location`), up to five in a row.
 - SDP: picks the video stream and its control URL.
 - RTP over the RTSP connection (interleaved TCP).
 - H.264 (RFC 6184: single units, STAP-A, FU-A) and H.265 (RFC 7798: single units, aggregation packets, fragmentation units).
@@ -100,7 +101,7 @@ S.Rtsp.close(s)
 | `flv.bend` | Pure: frames out of RTMP's tags (AVC and AAC as FLV holds them) |
 | `rtmp_core.bend` | Pure: handshake, chunks, commands, what a message means, FLV |
 | `amf.bend` | Pure: AMF0 |
-| `bytes.bend`, `text.bend`, `b64.bend`, `md5.bend` | Pure helpers |
+| `bytes.bend`, `text.bend`, `b64.bend`, `md5.bend`, `sha256.bend` | Pure helpers |
 | `rtsp.bend`, `rtmp.bend` | The IO: the two sessions |
 | `opts.bend` | Pure: options, and errors with a reason |
 | `conn.bend` | A connection's opening, reads and writes |
@@ -113,7 +114,7 @@ S.Rtsp.close(s)
 `bend PROOF.bend` prints `ALL PROOFS CHECK` only while every law in [`LAWS.bend`](LAWS.bend) holds. Among them:
 
 - no piece of an RTSP request carries a CR or LF, for every string, so a URL or a header value cannot start another header or request (by induction);
-- the Digest answer is the example of RFC 2617 3.5, and Basic the one of RFC 7617;
+- the Digest answer is the example of RFC 2617 3.5, and those of RFC 7616 3.9.1 over SHA-256 and MD5; SHA-256 itself gives the vectors of FIPS 180-4; Basic is the example of RFC 7617;
 - an H.264 unit split in FU-A fragments comes out whole, and a fragment whose start was lost gives nothing;
 - AMF0 numbers are the right IEEE 754 doubles, and a field of a status object is found after a round trip;
 - an FLV tag has the bytes the format says;
@@ -125,7 +126,7 @@ S.Rtsp.close(s)
 ./test.sh
 ```
 
-It proves the laws, builds the binary, starts a local [mediamtx](https://github.com/bluenviron/mediamtx) fed by `ffmpeg`, records from it over both protocols and checks each file with `ffprobe`. It also covers TLS, with a certificate made on the spot. It needs `mediamtx`, `ffmpeg`, `ffprobe` and `openssl`. `AUTH=basic ./test.sh` runs it with Basic instead of Digest, and `OTHERS=1 ./test.sh` adds an RTMP pull from SRS and from nginx-rtmp (in Docker).
+It proves the laws, builds the binary, starts a local [mediamtx](https://github.com/bluenviron/mediamtx) fed by `ffmpeg`, records from it over both protocols and checks each file with `ffprobe`. It also covers TLS, with a certificate made on the spot. It needs `mediamtx`, `ffmpeg`, `ffprobe`, `openssl` and `python3` (a server that only redirects). `AUTH=basic ./test.sh` runs it with Basic instead of Digest, and `OTHERS=1 ./test.sh` adds an RTMP pull from SRS and from nginx-rtmp (in Docker).
 
 Beyond the script, the RTSP client was run against real recorders: an Intelbras MHDX DVR and a Hikvision DS-7632NXI-K2 NVR in H.264, and a camera in H.265.
 

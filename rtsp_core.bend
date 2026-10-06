@@ -8,6 +8,7 @@ import ./text.bend as T
 import ./bytes.bend as B
 import ./b64.bend as E
 import ./md5.bend as D
+import ./sha256.bend as H
 
 # A header field.
 type Hdr is Data:
@@ -423,10 +424,11 @@ def Chal.algo(c: Chal) -> String:
   a
 
 # Whether this one can be answered: Basic, or Digest with MD5 (the
-# default when no algorithm is named).
+# default when no algorithm is named) or SHA-256 (RFC 7616).
 def Chal.digest(+c: Chal) -> Bool:
   String.eq(Chal.scheme(c), "digest")
-    && (String.is_empty(Chal.algo(c)) || String.eq(Chal.algo(c), "MD5"))
+    && (String.is_empty(Chal.algo(c)) || String.eq(Chal.algo(c), "MD5")
+      || String.eq(Chal.algo(c), "SHA-256"))
 
 def Chal.basic(c: Chal) -> Bool:
   String.eq(Chal.scheme(c), "basic")
@@ -449,13 +451,26 @@ def Chal.or.at(none: Bool, a: Chal, b: Chal) -> Chal:
 def Chal.or(+a: Chal, b: Chal) -> Chal:
   Chal.or.at(String.is_empty(Chal.scheme(a)), a, b)
 
-# The challenge to answer among a reply's: a Digest one over MD5 if
-# there is one (the password does not travel), else Basic, else none.
+# The challenge to answer among a reply's: the first Digest one this
+# client can answer, if there is one (the password does not travel; a
+# server lists the one it prefers first, RFC 7616 3.7), else Basic, else
+# none.
 def Chal.pick(+cs: List<&2, Chal>) -> Chal:
   Chal.or(Chal.first(cs, True{}), Chal.first(cs, False{}))
 
 def Auth.md5(s: String) -> String:
   D.Md5.hex(D.Md5.hash(E.Utf8.bytes(s)))
+
+def Auth.sha256(s: String) -> String:
+  D.Md5.hex(H.Sha.hash(E.Utf8.bytes(s)))
+
+# The hash a Digest challenge names, in hex.
+def Auth.hash(sha: Bool, s: String) -> String:
+  match sha:
+    case True{}:
+      Auth.sha256(s)
+    case False{}:
+      Auth.md5(s)
 
 def Auth.esc(s: String) -> String:
   match s:
@@ -472,15 +487,16 @@ def Auth.esc(s: String) -> String:
 def Auth.q(s: String) -> String:
   "\"" ++ Auth.esc(T.Text.clean(s)) ++ "\""
 
-# Digest's response (RFC 2617 3.2.2): with qop=auth the nonce count and
-# the client nonce enter the hash; without it, the 2069 form.
+# Digest's response (RFC 2617 3.2.2, RFC 7616 3.4.1): with qop=auth the
+# nonce count and the client nonce enter the hash; without it, the 2069
+# form. sha: SHA-256 instead of MD5.
 def Auth.response(+user: String, +realm: String, pass: String, method: String,
-  +uri: String, +nonce: String, auth: Bool, +cnonce: String) -> String:
-  +ha1 = Auth.md5(user ++ ":" ++ realm ++ ":" ++ pass)
-  +ha2 = Auth.md5(method ++ ":" ++ uri)
+  +uri: String, +nonce: String, auth: Bool, +cnonce: String, +sha: Bool) -> String:
+  +ha1 = Auth.hash(sha, user ++ ":" ++ realm ++ ":" ++ pass)
+  +ha2 = Auth.hash(sha, method ++ ":" ++ uri)
   Bool.pick(String, auth,
-    Auth.md5(ha1 ++ ":" ++ nonce ++ ":00000001:" ++ cnonce ++ ":auth:" ++ ha2),
-    Auth.md5(ha1 ++ ":" ++ nonce ++ ":" ++ ha2))
+    Auth.hash(sha, ha1 ++ ":" ++ nonce ++ ":00000001:" ++ cnonce ++ ":auth:" ++ ha2),
+    Auth.hash(sha, ha1 ++ ":" ++ nonce ++ ":" ++ ha2))
 
 def Auth.opt(+v: String, text: String) -> String:
   Bool.pick(String, String.is_empty(v), "", text)
@@ -491,8 +507,9 @@ def Auth.digest(c: Chal, +user: String, pass: String, method: String, +uri: Stri
   +auth = String.contains(qop, "auth")
   "Digest username=" ++ Auth.q(user) ++ ", realm=" ++ Auth.q(realm) ++ ", nonce="
     ++ Auth.q(nonce) ++ ", uri=" ++ Auth.q(uri) ++ ", response=\""
-    ++ Auth.response(user, realm, pass, method, uri, nonce, auth, cnonce) ++ "\""
-    ++ Auth.opt(algo, ", algorithm=MD5")
+    ++ Auth.response(user, realm, pass, method, uri, nonce, auth, cnonce,
+      String.eq(algo, "SHA-256")) ++ "\""
+    ++ Auth.opt(algo, ", algorithm=" ++ algo)
     ++ Auth.opt(opaque, ", opaque=" ++ Auth.q(opaque))
     ++ Bool.pick(String, auth, ", qop=auth, nc=00000001, cnonce=" ++ Auth.q(cnonce), "")
 

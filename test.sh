@@ -137,6 +137,14 @@ codec=$(ffprobe -v error -f alaw -ar 8000 -show_entries stream=codec_name -of cs
   && ok "rtsp: the audio alone, G.711 ($size bytes)" || bad "rtsp: G.711: $size bytes, $codec"
 streams=$(ffprobe -v error -show_entries stream=codec_type -of csv=p=0 "$T/w.ts" 2>/dev/null | grep -c audio)
 [ "$streams" = "0" ] && ok "ts: G.711 is left out of a TS" || bad "ts: $streams audio streams with G.711"
+# A server that sends the client elsewhere, and one that sends it in circles.
+python3 tests/redirect.py 18556 rtsp://127.0.0.1:18554/open > /dev/null 2>&1 &
+pids="$pids $!"
+python3 tests/redirect.py 18557 rtsp://127.0.0.1:18557/again > /dev/null 2>&1 &
+pids="$pids $!"
+sleep 0.5
+pull "rtsp: a redirect followed" rtsp://127.0.0.1:18556/elsewhere aa.h264 h264
+fails "rtsp: redirects in circles" rtsp://127.0.0.1:18557/x "too many redirects"
 fails "rtsp: wrong password" rtsp://cam:errada@127.0.0.1:18554/priv "login refused"
 fails "rtsp: no such path" rtsp://127.0.0.1:18554/nada "no such stream|refused"
 fails "rtsp: nothing listening" rtsp://127.0.0.1:18999/x "cannot connect"

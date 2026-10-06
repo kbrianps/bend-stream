@@ -40,8 +40,27 @@ law request_one_line:
 # LAW: the Digest answer is the one of RFC 2617 3.5.
 law digest_rfc2617:
   {C.Auth.response("Mufasa", "testrealm@host.com", "Circle Of Life", "GET",
-    "/dir/index.html", "dcd98b7102dd2f0e8b11d0f600bfb0c093", True{}, "0a4f113b")
+    "/dir/index.html", "dcd98b7102dd2f0e8b11d0f600bfb0c093", True{}, "0a4f113b", False{})
     == "6629fae49393a05397450978507c4ef1" : String}
+
+# LAW: SHA-256 is the one of FIPS 180-4: the empty message and "abc".
+law sha256_vectors:
+  {[C.Auth.sha256(""), C.Auth.sha256("abc")]
+    == ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"]
+    : List<&2, String>}
+
+# LAW: the Digest answers of RFC 7616 3.9.1, the same exchange over
+# SHA-256 and over MD5.
+law digest_rfc7616:
+  {[C.Auth.response("Mufasa", "http-auth@example.org", "Circle of Life", "GET",
+      "/dir/index.html", "7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v", True{},
+      "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ", True{}),
+    C.Auth.response("Mufasa", "http-auth@example.org", "Circle of Life", "GET",
+      "/dir/index.html", "7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v", True{},
+      "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ", False{})]
+    == ["753927fa0e85d155564e2e272a28d1802ca10daf4496794697cf8db5856cb6c1",
+      "8ca523f5e9506fed4657c9700eebdbec"] : List<&2, String>}
 
 # LAW: Basic is the example of RFC 7617 2.
 law basic_rfc7617:

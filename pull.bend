@@ -193,13 +193,18 @@ def Pull.rtsp.file(r: Result<&1, &1, U32 & String, File>, s: S.Sess, rec: W.Rec,
     case Done{f}:
       Pull.rtsp.loop(4000000000n, s, f, rec, until, Stat{0, 0, 0, 0, 0, False{}}, kind, o)
 
+# What is being recorded: "H264", or "H264+PCMA" with audio.
+def Pull.kind(+i: F.Info) -> String:
+  F.Info.codec(i) ++ Bool.pick(String, String.is_empty(F.Info.audio(i)), "",
+    "+" ++ F.Info.audio(i))
+
 def Pull.rtsp.at(sa: S.Sess & F.Info, +out: String, ms: U32, o: E.Opts) -> IO(String):
   (s, +info) = sa
   do IO<String>:
     now : Nat <- IO.now()
     f : Result<&1, &1, U32 & String, File> <- File.open(out, "w")
     Pull.rtsp.file(f, s, W.Rec.for(out, info), Nat.add(now, U32.to_nat(ms)),
-      F.Info.codec(info), o)
+      Pull.kind(info), o)
 
 def Pull.rtsp.opened(r: S.Opened(), out: String, ms: U32, o: E.Opts) -> IO(String):
   match r:
