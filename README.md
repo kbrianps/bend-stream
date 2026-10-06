@@ -2,11 +2,11 @@
 
 RTSP and RTMP clients written in [Bend 2](https://github.com/HigherOrderCO/Bend2). The protocols are all Bend; one C file, `net.c`, gives the sockets what Base's lack: hosts by name, TLS and reads with a deadline.
 
-It records a camera or a stream into a file:
+It is a library (a session gives frames, see below) and a recorder built on it:
 
 ```sh
 bend pull.bend -o pull
-./pull rtsp://user:pass@camera.example:554/stream out.h264 10
+./pull rtsp://user:pass@camera.example:554/stream out.ts 10
 ./pull rtmp://192.168.0.20/live/cam out.flv 10
 ```
 
@@ -15,7 +15,7 @@ bend pull.bend -o pull
 The last argument is how many seconds to record (10 when left out). The program prints what it did, or the error:
 
 ```
-ok: H264, 144 packets, 520 units, 142543 bytes
+ok: H264, 125 frames, 142543 bytes
 ```
 
 ## What it does
@@ -27,42 +27,82 @@ ok: H264, 144 packets, 520 units, 142543 bytes
 - SDP: picks the video stream and its control URL.
 - RTP over the RTSP connection (interleaved TCP).
 - H.264 (RFC 6184: single units, STAP-A, FU-A) and H.265 (RFC 7798: single units, aggregation packets, fragmentation units).
-- Writes the raw stream in Annex B form, the parameter sets of the SDP first (`ffplay out.h264` plays it); or, to a file named `.ts`, MPEG-TS with the time of each picture, which is what a recording wants. A TS also takes the audio when it is AAC (RFC 3640).
+- Gives whole pictures (access units in Annex B form) and, when the audio is AAC (RFC 3640), its frames, each with its time.
+- The recorder writes them raw (`ffplay out.h264` plays it) or, to a file named `.ts`, as MPEG-TS with the audio and the time of each frame, which is what a recording wants.
 
 **RTMP**
 
 - The plain handshake, the chunk stream in both directions (all four header types, extended timestamps, Set Chunk Size), AMF0.
 - `connect`, `createStream`, `play`; answers pings and sends acknowledgements.
-- Writes the audio and video messages and the metadata as an FLV file, whatever codecs the server sends.
+- Gives the audio and video messages and the metadata as tags; the recorder writes them as an FLV file, whatever the codecs, or takes the H.264 and AAC frames out into a `.ts` or a raw file.
 - A login goes in the URL's query (`rtmp://host/app?user=...&pass=...`), as the servers that use one expect.
 
-## From your own program
+## The library
+
+A session gives frames; what to do with them is the program's business. Bend's functions cannot be called twice, so there is no callback: the program asks for the next frame, as with `av_read_frame`.
 
 ```python
 import ./rtsp.bend as S
-import ./rtmp.bend as M
 import ./conn.bend as N
+import ./frame.bend as F
 
-# 10 seconds of each
-r : N.Out() <- S.Rtsp.pull("rtsp://user:pass@192.168.0.10/stream", "cam.h264", 10000)
-r : N.Out() <- M.Rtmp.pull("rtmp://192.168.0.20/live/cam", "cam.flv", 10000)
+# open: connect, log in, set the streams up, play
+r : S.Opened() <- S.Rtsp.open(N.Opts.new("rtsp://user:pass@camera/stream"))
+#   Done{s}   a session
+#   Fail{e}   an N.Err: why, a code, words
+
+# next: one frame, and the session to go on with
+r : S.Read() <- S.Rtsp.next(s)
+#   Done{(s, F.Video{pts, key, data})}   a picture: its NAL units in Annex B form
+#   Done{(s, F.Audio{pts, data})}        AAC frames, each after an ADTS header
+#   Fail{e}                              the session is over, the connection closed
+
+S.Rtsp.close(s)
 ```
 
-The result is `Done{Pulled{packets, units, bytes, kind}}` or `Fail{(code, message)}`.
+[`examples/frames.bend`](examples/frames.bend) is that loop, whole, printing each frame; [`pull.bend`](pull.bend) is the recorder.
+
+**Options** (`conn.bend`): `N.Opts.new(url)`, then any of `N.Opts.login(o, user, pass)` (instead of the URL's), `N.Opts.wait(o, ms)` (how long the server may stay silent; 10 s), `N.Opts.audio(o, False{})` (video only), `N.Opts.ca(o, "ca.pem")` (the certificate to trust under TLS).
+
+**Frames** (`frame.bend`): `pts` is in 90 kHz ticks since the stream's first frame; `key` says a decoder can start there. `S.Rtsp.about(s)` gives the session back with an `F.Info`: the codec (`"H264"` or `"H265"`), the parameter sets the server announced, whether there is audio.
+
+**Errors** (`conn.bend`): an `N.Err{why, code, msg}`. `why` is what a program acts on:
+
+| `why` | Meaning | What to do |
+|---|---|---|
+| `NoRoute` | cannot connect (name, port, network) | try again later |
+| `Silent` | the server sent nothing for `wait` ms | try again |
+| `Hangup` | the connection closed or broke | try again |
+| `Ended` | the stream came to its end (RTMP) | nothing: not a failure |
+| `NoLogin` | wrong or missing user and password | ask for another |
+| `NoStream` | the server has no such stream | give up |
+| `Unsafe` | TLS failed (certificate, handshake) | give up |
+| `Refused` | the server said no to a request | give up |
+| `Garbled` | what came is not the protocol | give up |
+| `BadUrl` | not a URL of this protocol | give up |
+
+`N.Err.show(e)` puts one in a line.
+
+**Recording** (`rec.bend`): `W.Rec.for(path, info)` makes a recorder for the form the file's name asks for (`.ts`, or raw), and `W.Rec.put(rec, frame)` gives the bytes to write and the recorder to go on with.
+
+**RTMP** (`rtmp.bend`) is the same three calls, `M.Rtmp.open`, `M.Rtmp.next`, `M.Rtmp.close`, and gives tags (`K.Tag{typ, ts, data}`): written after `K.Flv.header()`, each as `K.Flv.of(tag)`, they are an FLV file. `V.Flv.frames(state, tag)` (`flv.bend`) takes the frame out of a tag, the same `F.Frame` an RTSP session gives, so an RTMP stream records to `.ts` too.
 
 ## Files
 
 | File | What is in it |
 |---|---|
 | `rtsp_core.bend` | Pure: URLs, requests, replies and interleaved frames, authentication, SDP |
-| `rtp.bend` | Pure: RTP packets, H.264 and H.265 units, Annex B |
-| `mux.bend`, `ts.bend`, `audio.bend` | Pure: access units, MPEG-TS (PAT, PMT, PES, the clock), AAC with ADTS headers |
+| `rtp.bend`, `depay.bend` | Pure: RTP packets, H.264 and H.265 units, Annex B; frames out of packets |
+| `frame.bend` | What a session gives: `Frame` and `Info` |
+| `rec.bend`, `ts.bend`, `audio.bend` | Pure: frames into a file (raw, MPEG-TS: PAT, PMT, PES, the clock), AAC with ADTS headers |
+| `flv.bend` | Pure: frames out of RTMP's tags (AVC and AAC as FLV holds them) |
 | `rtmp_core.bend` | Pure: handshake, chunks, commands, what a message means, FLV |
 | `amf.bend` | Pure: AMF0 |
 | `bytes.bend`, `text.bend`, `b64.bend`, `md5.bend` | Pure helpers |
-| `rtsp.bend`, `rtmp.bend`, `conn.bend` | The IO: the two dialogs over a socket |
+| `rtsp.bend`, `rtmp.bend` | The IO: the two sessions |
+| `conn.bend` | Options, errors, and a connection's reads and writes |
 | `net.bend`, `net.c`, `net.js` | The sockets: names, TLS, deadlines (native only; the JS side refuses) |
-| `pull.bend` | The command line |
+| `pull.bend`, `examples/` | The recorder, and smaller programs that use the library |
 | `LAWS.bend`, `PROOF.bend` | The laws and their proofs |
 
 ## Laws
@@ -88,12 +128,12 @@ Beyond the script, the RTSP client was run against real recorders: an Intelbras 
 
 ## Limits
 
-- RTSP: only RTP over the RTSP connection (no UDP). Audio only as AAC and only into a TS: G.711, which many cameras send, is left out.
+- RTSP: only RTP over the RTSP connection (no UDP). Audio only as AAC: G.711, which many cameras send, is not read.
 - Sound and picture are lined up by their first packets, not by RTCP sender reports.
 - RTMP: playing only, no publishing. A missing login shows as "the server closed the connection".
 - The TS takes the RTP timestamp for both the presentation and the decoding time, which is wrong for a stream with B-frames (cameras rarely make them).
-- The FLV keeps the server's timestamps, so it may not start at zero.
-- A server silent for 10 seconds ends the pull; there is no reconnection.
+- The FLV keeps the server's timestamps, so it may not start at zero. Frames out of RTMP are H.264 and AAC only (no enhanced RTMP).
+- There is no reconnection: a session that fails says why, and the program opens another.
 - Native only: `bend pull.bend` alone runs the JS side, which has no sockets of this kind.
 - Bytes are linked lists in Bend: expect about 280 MB of memory for a 640x360 stream.
 
