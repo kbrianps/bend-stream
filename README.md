@@ -43,9 +43,9 @@ ok: H264, 125 frames, 142543 bytes
 A session gives frames; what to do with them is the program's business. Bend's functions cannot be called twice, so there is no callback: the program asks for the next frame, as with `av_read_frame`.
 
 ```python
-import ./rtsp.bend as S
-import ./opts.bend as E
-import ./frame.bend as F
+import 0xfbc4773809086afacef84e7fba6d620c/rtsp.bend as S
+import 0xfbc4773809086afacef84e7fba6d620c/opts.bend as E
+import 0xfbc4773809086afacef84e7fba6d620c/frame.bend as F
 
 # open: connect, log in, set the streams up, play
 r : S.Opened() <- S.Rtsp.open(E.Opts.new("rtsp://user:pass@camera/stream"))
@@ -60,6 +60,8 @@ r : S.Read() <- S.Rtsp.next(s)
 
 S.Rtsp.close(s)
 ```
+
+Those lines fetch the package from the Bend hub; the other files are under the same hash (`rtmp.bend`, `rec.bend`, `flv.bend`, `conn.bend`...). Or clone this repository and import `./rtsp.bend`. A program that uses the library is built natively (`bend program.bend -o program`), because the sockets are in `net.c`.
 
 [`examples/frames.bend`](examples/frames.bend) is that loop, whole, printing each frame; [`pull.bend`](pull.bend) is the recorder.
 
