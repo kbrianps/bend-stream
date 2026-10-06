@@ -35,7 +35,7 @@ ok: H264, 125 frames, 142543 bytes
 
 - The plain handshake, the chunk stream in both directions (all four header types, extended timestamps, Set Chunk Size), AMF0.
 - `connect`, `createStream`, `play`; answers pings and sends acknowledgements.
-- Gives the audio and video messages and the metadata as tags; the recorder writes them as an FLV file, whatever the codecs, or takes the H.264 and AAC frames out into a `.ts` or a raw file.
+- Gives the audio and video messages and the metadata as tags; the recorder writes them as an FLV file, whatever the codecs, or takes the frames out into a `.ts` or a raw file: H.264, H.265 (enhanced RTMP, which the client announces in `connect`), AAC and G.711.
 - A login goes in the URL's query (`rtmp://host/app?user=...&pass=...`), as the servers that use one expect.
 
 ## The library
@@ -119,7 +119,7 @@ Those lines fetch the package from the Bend hub; the other files are under the s
 - the Digest answer is the example of RFC 2617 3.5, and those of RFC 7616 3.9.1 over SHA-256 and MD5; SHA-256 itself gives the vectors of FIPS 180-4; Basic is the example of RFC 7617;
 - an H.264 unit split in FU-A fragments comes out whole, and a fragment whose start was lost gives nothing;
 - AMF0 numbers are the right IEEE 754 doubles, and a field of a status object is found after a round trip;
-- an FLV tag has the bytes the format says;
+- an FLV tag has the bytes the format says, and the frames come out of tags as they should: H.264, H.265 as enhanced RTMP carries it, G.711;
 - the PAT is byte for byte the one every muxer writes, CRC included, and a PES packet of any size comes out in whole 188-byte packets.
 
 ## Tests
@@ -128,7 +128,7 @@ Those lines fetch the package from the Bend hub; the other files are under the s
 ./test.sh
 ```
 
-It proves the laws, builds the binary, starts a local [mediamtx](https://github.com/bluenviron/mediamtx) fed by `ffmpeg`, records from it over both protocols and checks each file with `ffprobe`. It also covers TLS, with a certificate made on the spot. It needs `mediamtx`, `ffmpeg`, `ffprobe`, `openssl` and `python3` (a server that only redirects). `AUTH=basic ./test.sh` runs it with Basic instead of Digest, and `OTHERS=1 ./test.sh` adds an RTMP pull from SRS and from nginx-rtmp (in Docker).
+It proves the laws, builds the binary, starts a local [mediamtx](https://github.com/bluenviron/mediamtx) fed by `ffmpeg`, records from it over both protocols and checks each file with `ffprobe`. It also covers TLS, with a certificate made on the spot. It needs `mediamtx`, `ffmpeg`, `ffprobe`, `openssl` and `python3` (a server that only redirects). `AUTH=basic ./test.sh` runs it with Basic instead of Digest, and `OTHERS=1 ./test.sh` adds, in Docker, an RTMP pull from SRS and from nginx-rtmp, and H.265 and G.711 over RTMP from a recent mediamtx.
 
 Beyond the script, the RTSP client was run against real recorders, into MPEG-TS: an Intelbras MHDX DVR and a Hikvision DS-7632NXI-K2 NVR in H.264, and a camera in H.265 with G.711 (PCMU) audio.
 
@@ -138,7 +138,7 @@ Beyond the script, the RTSP client was run against real recorders, into MPEG-TS:
 - Sound and picture are lined up by their first packets, not by RTCP sender reports.
 - RTMP: playing only, no publishing. A missing login shows as "the server closed the connection".
 - The TS takes the RTP timestamp for both the presentation and the decoding time, which is wrong for a stream with B-frames (cameras rarely make them).
-- The FLV keeps the server's timestamps, so it may not start at zero. Frames out of RTMP are H.264 and AAC only (no enhanced RTMP).
+- The FLV keeps the server's timestamps, so it may not start at zero. Of enhanced RTMP only H.265 is read (no AV1, VP9 or multitrack).
 - A lost session is not mended by itself: `next` says why it failed, and the program calls `reopen` (the recorder does).
 - Native only: `bend pull.bend` alone runs the JS side, which has no sockets of this kind.
 - Bytes are linked lists in Bend: expect about 280 MB of memory for a 640x360 stream.

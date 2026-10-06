@@ -168,7 +168,9 @@ def Where.stream(w: Where) -> String:
   Where{_, s} = w
   s
 
-# connect, transaction 1: the application, and its URL.
+# connect, transaction 1: the application, its URL, and the codecs of
+# enhanced RTMP this client reads (H.265), which a server sends only to
+# a client that names them.
 def Rtmp.connect(+app: String, host: String, port: U32) -> List<&2, U32>:
   Rtmp.command(3, 0, [A.AStr{"connect"}, A.ANum{1}, A.AObj{},
     A.AKey{"app"}, A.AStr{app},
@@ -180,6 +182,7 @@ def Rtmp.connect(+app: String, host: String, port: U32) -> List<&2, U32>:
     A.AKey{"audioCodecs"}, A.ANum{4071},
     A.AKey{"videoCodecs"}, A.ANum{252},
     A.AKey{"videoFunction"}, A.ANum{1},
+    A.AKey{"fourCcList"}, A.AArr{1}, A.AStr{"hvc1"},
     A.AEnd{}])
 
 # createStream, transaction 2: its result carries the stream's id.

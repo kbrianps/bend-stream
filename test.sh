@@ -199,7 +199,8 @@ done
 if [ -n "$OTHERS" ]; then
   docker run -d --rm --name bs-srs -p 11938:1935 ossrs/srs:5 > /dev/null
   docker run -d --rm --name bs-nginx -p 11937:1935 tiangolo/nginx-rtmp > /dev/null
-  trap 'kill $pids 2>/dev/null; docker stop bs-srs bs-nginx > /dev/null 2>&1; rm -rf "$T"' EXIT
+  docker run -d --rm --name bs-mtx -p 11939:1935 bluenviron/mediamtx:1.17.1 > /dev/null
+  trap 'kill $pids 2>/dev/null; docker stop bs-srs bs-nginx bs-mtx > /dev/null 2>&1; rm -rf "$T"' EXIT
   sleep 4
   for port in 11938 11937; do
     ffmpeg $SRC -f lavfi -i sine=frequency=440:sample_rate=44100 $X264 -c:a aac -b:a 64k \
@@ -212,6 +213,23 @@ if [ -n "$OTHERS" ]; then
   pull "rtmp: nginx-rtmp, video" rtmp://127.0.0.1:11937/live/cam i.flv h264
   pull "rtmp: nginx-rtmp, audio" rtmp://127.0.0.1:11937/live/cam j.flv aac a
   fails "rtmp: a stream nobody publishes (10 s)" rtmp://127.0.0.1:11938/live/nada "timed out"
+  # Enhanced RTMP (H.265) and G.711, which a recent mediamtx carries.
+  ffmpeg $SRC -f lavfi -i sine=frequency=440:sample_rate=44100 -c:v libx265 -preset ultrafast \
+    -tune zerolatency -g 25 -bf 0 -x265-params log-level=error -pix_fmt yuv420p -c:a aac -b:a 64k \
+    -f flv rtmp://127.0.0.1:11939/hevc > /dev/null 2>&1 &
+  pids="$pids $!"
+  ffmpeg $SRC -f lavfi -i sine=frequency=440:sample_rate=8000 $X264 -c:a pcm_alaw -ar 8000 -ac 1 \
+    -f flv rtmp://127.0.0.1:11939/alaw > /dev/null 2>&1 &
+  pids="$pids $!"
+  sleep 4
+  pull "rtmp: H.265 into MPEG-TS, the video" rtmp://127.0.0.1:11939/hevc ba.ts hevc
+  pull "rtmp: H.265 into MPEG-TS, the audio" rtmp://127.0.0.1:11939/hevc bb.ts aac a
+  pull "rtmp: H.265, the raw video" rtmp://127.0.0.1:11939/hevc bc.h265 hevc
+  pull "rtmp: H.265 into FLV" rtmp://127.0.0.1:11939/hevc bd.flv hevc
+  pull "rtmp: H.264 beside G.711 into MPEG-TS" rtmp://127.0.0.1:11939/alaw be.ts h264
+  "$T/pull" rtmp://127.0.0.1:11939/alaw "$T/bf.alaw" 3 > /dev/null 2>&1
+  size=$(stat -c %s "$T/bf.alaw" 2>/dev/null || echo 0)
+  [ "$size" -gt 16000 ] && [ "$size" -lt 40000 ] && ok "rtmp: the audio alone, G.711 ($size bytes)" || bad "rtmp: G.711: $size bytes"
 fi
 
 [ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

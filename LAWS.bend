@@ -12,6 +12,8 @@ import ./rtp.bend as R
 import ./ts.bend as S
 import ./audio.bend as U
 import ./opts.bend as E
+import ./flv.bend as V
+import ./frame.bend as F
 
 def Laws.nals(o: R.Out) -> List<&2, List<&2, U32>>:
   R.Out{n, _} = o
@@ -23,6 +25,14 @@ def Laws.zeros(n: Nat, acc: List<&2, U32>) -> List<&2, U32>:
       acc
     case 1n+p:
       Laws.zeros(p, 0 <> acc)
+
+def Laws.tag(o: V.Out) -> List<&2, F.Frame>:
+  V.Out{fs, _} = o
+  fs
+
+def Laws.flv(o: V.Out) -> V.Flv:
+  V.Out{_, st} = o
+  st
 
 def Laws.state(o: R.Out) -> R.Dep:
   R.Out{_, s} = o
@@ -181,3 +191,35 @@ law give_up_only_on_what_lasts:
     E.Why.lasting(E.Ended{})]
     == [True{}, True{}, True{}, False{}, False{}, False{}, False{}, False{}, False{},
       False{}] : List<&2, Bool>}
+
+# RTMP's tags
+# -----------
+
+# LAW: H.265 as enhanced RTMP carries it. A configuration tag (top bit,
+# "hvc1", packet type 0) with one parameter set AA BB, then a key
+# picture with no time offset (packet type 3) holding the unit 26 01:
+# the picture comes out in Annex B form, the parameter set in front,
+# and the stream is known as H265.
+law flv_hevc:
+  {[Laws.tag(V.Flv.frames(Laws.flv(V.Flv.frames(V.Flv.new(), K.Tag{9, 0,
+      [144, 104, 118, 99, 49, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        255, 1, 32, 0, 1, 0, 2, 170, 187]})),
+      K.Tag{9, 40, [147, 104, 118, 99, 49, 0, 0, 0, 2, 38, 1]}))]
+    == [[F.Video{0, True{}, [0, 0, 0, 1, 170, 187, 0, 0, 0, 1, 38, 1]}]]
+    : List<&2, List<&2, F.Frame>>}
+
+# LAW: a classic H.264 tag: the configuration is read after the three
+# bytes of time offset every AVC tag has, and a picture of two units
+# comes out as two units.
+law flv_avc:
+  {[Laws.tag(V.Flv.frames(Laws.flv(V.Flv.frames(V.Flv.new(), K.Tag{9, 0,
+      [23, 0, 0, 0, 0, 1, 66, 192, 30, 255, 225, 0, 2, 103, 66, 1, 0, 1, 104]})),
+      K.Tag{9, 0, [39, 1, 0, 0, 0, 0, 0, 0, 1, 65, 0, 0, 0, 2, 65, 154]}))]
+    == [[F.Video{0, False{}, [0, 0, 0, 1, 65, 0, 0, 0, 1, 65, 154]}]]
+    : List<&2, List<&2, F.Frame>>}
+
+# LAW: G.711 in a tag is its samples, and the tag says which law.
+law flv_g711:
+  {[Laws.tag(V.Flv.frames(V.Flv.new(), K.Tag{8, 0, [114, 213, 85]})),
+    Laws.tag(V.Flv.frames(V.Flv.new(), K.Tag{8, 0, [130, 255]}))]
+    == [[F.Audio{0, [213, 85]}], [F.Audio{0, [255]}]] : List<&2, List<&2, F.Frame>>}

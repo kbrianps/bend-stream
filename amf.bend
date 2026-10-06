@@ -8,7 +8,8 @@
 # carry are small whole numbers (a transaction, a stream id), so ANum
 # holds a U32: the whole part of the double, 0 for a negative one.
 # Arrays (marker 10) and the rest end the decoding: the tokens before
-# them are what is given.
+# them are what is given. Writing has them: AArr{n} opens an array of
+# the n values that follow.
 import Base
 import ./bytes.bend as B
 
@@ -20,6 +21,7 @@ type Tok is Data:
   AObj{}
   AKey{s: String}
   AEnd{}
+  AArr{n: U32}
 
 # Doubles
 # -------
@@ -79,6 +81,8 @@ def Amf.tok(t: Tok, rest: List<&2, U32>) -> List<&2, U32>:
       Amf.str(s, rest)
     case AEnd{}:
       0 <> 0 <> 9 <> rest
+    case AArr{n}:
+      10 <> B.Bytes.put32(n, rest)
 
 def Amf.rev(ts: List<&2, Tok>, acc: List<&2, Tok>) -> List<&2, Tok>:
   match ts:
