@@ -466,6 +466,12 @@ def Rtmp.event(st: Dec, buf: List<&2, U32>) -> Ev:
 # FLV
 # ---
 
+# A media message as a session gives it: audio (8), video (9) or the
+# metadata (18), its time in ms, and the data in the form an FLV tag
+# holds (flv.bend takes frames out of it).
+type Tag is Data:
+  Tag{typ: U32, ts: U32, data: List<&2, U32>}
+
 # The file's header (audio and video both announced), and the size of
 # the tag before the first, which is none.
 def Flv.header() -> List<&2, U32>:
@@ -477,3 +483,8 @@ def Flv.tag(typ: U32, +ts: U32, +data: List<&2, U32>) -> List<&2, U32>:
   +n = B.Bytes.len(data)
   typ <> B.Bytes.put24(n, B.Bytes.put24(U32.and(ts, 16777215), U32.shrn(ts, 24n) <> 0
     <> 0 <> 0 <> B.Bytes.cat(data, B.Bytes.put32(U32.add(n, 11), Nil{}))))
+
+# A tag's bytes in a file.
+def Flv.of(t: Tag) -> List<&2, U32>:
+  Tag{typ, ts, data} = t
+  Flv.tag(typ, ts, data)

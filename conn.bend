@@ -1,184 +1,218 @@
-# What the RTSP and RTMP clients share: the result of a pull, and a
+# What the RTSP and RTMP clients share: errors with a reason, and a
 # connection's opening, reads, writes and failures in continuation
-# style (the next step is handed the socket back). The sockets are
-# net.c's: hosts by name, TLS, and reads that give up after a while.
+# style (the next step is handed the socket back). A step that fails
+# closes the socket and ends in Fail, whatever the result T was to be.
+# The sockets are net.c's: hosts by name, TLS, reads with a deadline.
 import Base
 import ./bytes.bend as B
 import ./net.bend as X
 
-# What a pull did: the packets read (RTP packets, or RTMP messages),
-# the units written (NAL units, or FLV tags), the bytes written, and
-# the codec or container.
-type Pulled is Data:
-  Pulled{packets: U32, units: U32, bytes: U32, kind: String}
+# Options
+# -------
 
-def Out() -> Type:
-  Result<&1, &1, U32 & String, Pulled>
+# url: the stream's address. user, pass: the login, when it is not in
+# the URL. wait: how long, in ms, the server may stay silent. audio:
+# whether to ask for the audio too. ca: a PEM file to check a TLS
+# server's certificate against, "" for the system's store.
+type Opts is Data:
+  Opts{url: String, user: String, pass: String, wait: U32, audio: Bool, ca: String}
+
+def Opts.new(url: String) -> Opts:
+  Opts{url, "", "", 10000, True{}, ""}
+
+def Opts.login(o: Opts, user: String, pass: String) -> Opts:
+  Opts{url, _, _, wait, audio, ca} = o
+  Opts{url, user, pass, wait, audio, ca}
+
+def Opts.wait(o: Opts, ms: U32) -> Opts:
+  Opts{url, user, pass, _, audio, ca} = o
+  Opts{url, user, pass, ms, audio, ca}
+
+def Opts.audio(o: Opts, yes: Bool) -> Opts:
+  Opts{url, user, pass, wait, _, ca} = o
+  Opts{url, user, pass, wait, yes, ca}
+
+def Opts.ca(o: Opts, path: String) -> Opts:
+  Opts{url, user, pass, wait, audio, _} = o
+  Opts{url, user, pass, wait, audio, path}
+
+def Opts.wait.of(o: Opts) -> U32:
+  Opts{_, _, _, w, _, _} = o
+  w
+
+def Opts.url(o: Opts) -> String:
+  Opts{u, _, _, _, _, _} = o
+  u
+
+def Opts.ca.of(o: Opts) -> String:
+  Opts{_, _, _, _, _, c} = o
+  c
+
+# Errors
+# ------
+
+# Why something failed, for a program to act on: try again later
+# (NoRoute, Silent, Hangup), ask for another password (NoLogin), give up
+# (NoStream, Unsafe, Refused, Garbled, BadUrl). Ended is no failure:
+# the stream came to its end.
+type Why is Data:
+  NoRoute{}
+  Unsafe{}
+  NoLogin{}
+  NoStream{}
+  Silent{}
+  Hangup{}
+  Refused{}
+  Garbled{}
+  BadUrl{}
+  Ended{}
+
+# An error: why, the system's or the server's code (0 for none), and
+# words for a person.
+type Err is Data:
+  Err{why: Why, code: U32, msg: String}
+
+def Res(T: Type) -> Type:
+  Result<&1, &1, Err, T>
 
 def Recv() -> Type:
   Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>
 
-# How long a read waits for the server, in ms.
-def Conn.patience() -> U32:
-  10000
-
 def Sent() -> Type:
   Socket & Result<&1, &1, U32 & String, Unit>
 
-def Wrote() -> Type:
-  File & Result<&1, &1, U32 & String, Unit>
+def Why.name(w: Why) -> String:
+  match w:
+    case NoRoute{}:
+      "cannot connect"
+    case Unsafe{}:
+      "TLS failed"
+    case NoLogin{}:
+      "login refused"
+    case NoStream{}:
+      "no such stream"
+    case Silent{}:
+      "timed out"
+    case Hangup{}:
+      "connection closed"
+    case Refused{}:
+      "refused"
+    case Garbled{}:
+      "protocol error"
+    case BadUrl{}:
+      "bad URL"
+    case Ended{}:
+      "stream ended"
 
-def Pulled.add(p: Pulled, +units: U32, +bytes: U32) -> Pulled:
-  Pulled{packets, n, b, kind} = p
-  Pulled{U32.add(packets, 1), U32.add(n, units), U32.add(b, bytes), kind}
+def Why.ended(w: Why) -> Bool:
+  match w:
+    case Ended{}:
+      True{}
+    case _:
+      False{}
 
-def Conn.fail(s: Socket, code: U32, msg: String) -> IO(Out()):
-  do IO<Out()>:
+# An error in a line: "login refused (401): wrong user or password".
+def Err.show(e: Err) -> String:
+  Err{why, +code, msg} = e
+  Why.name(why) ++ Bool.pick(String, U32.is_zero(code), "", " (" ++ U32.show(code) ++ ")")
+    ++ ": " ++ msg
+
+# The socket closed and the error given.
+def Conn.fail(-T: Type, s: Socket, why: Why, code: U32, msg: String) -> IO(Res(T)):
+  do IO<Res(T)>:
     X.Net.close(s)
-    IO.pure(Out(), Fail{(code, msg)})
+    IO.pure(Res(T), Fail{Err{why, code, msg}})
 
-def Conn.got.n(s: Socket, buf: List<&2, U32>, +piece: List<&2, U32>,
-  more: Socket -> List<&2, U32> -> U32 -> IO(Out())) -> IO(Out()):
+def Conn.got.n(-T: Type, s: Socket, buf: List<&2, U32>, +piece: List<&2, U32>,
+  more: Socket -> List<&2, U32> -> U32 -> IO(Res(T))) -> IO(Res(T)):
   more(s, B.Bytes.cat(buf, piece), B.Bytes.len(piece))
 
-def Conn.got(m: Recv(), buf: List<&2, U32>,
-  more: Socket -> List<&2, U32> -> U32 -> IO(Out())) -> IO(Out()):
+def Conn.got(-T: Type, m: Recv(), buf: List<&2, U32>,
+  more: Socket -> List<&2, U32> -> U32 -> IO(Res(T))) -> IO(Res(T)):
   (s, r) = m
   match r:
     case Fail{e}:
       (code, msg) = e
-      Conn.fail(s, code, "recv: " ++ msg)
+      Conn.fail(T, s, Hangup{}, code, "recv: " ++ msg)
     case Done{None{}}:
-      Conn.fail(s, 0, "the server sent nothing for 10 seconds")
+      Conn.fail(T, s, Silent{}, 0, "the server sent nothing for too long")
     case Done{Some{Nil{}}}:
-      Conn.fail(s, 0, "the server closed the connection")
+      Conn.fail(T, s, Hangup{}, 0, "the server closed the connection")
     case Done{Some{Con{h, t}}}:
-      Conn.got.n(s, buf, h <> t, more)
+      Conn.got.n(T, s, buf, h <> t, more)
 
-# More bytes onto the buffer, and how many came.
-def Conn.recv.n(s: Socket, buf: List<&2, U32>,
-  more: Socket -> List<&2, U32> -> U32 -> IO(Out())) -> IO(Out()):
-  do IO<Out()>:
-    m : Recv() <- X.Net.poll(s, 65536, Conn.patience())
-    Conn.got(m, buf, more)
+# More bytes onto the buffer, waiting at most ms, and how many came.
+def Conn.recv.n(-T: Type, s: Socket, ms: U32, buf: List<&2, U32>,
+  more: Socket -> List<&2, U32> -> U32 -> IO(Res(T))) -> IO(Res(T)):
+  do IO<Res(T)>:
+    m : Recv() <- X.Net.poll(s, 65536, ms)
+    Conn.got(T, m, buf, more)
 
-# More bytes onto the buffer.
-def Conn.recv(s: Socket, buf: List<&2, U32>,
-  more: Socket -> List<&2, U32> -> IO(Out())) -> IO(Out()):
-  Conn.recv.n(s, buf, s2 => b2 => _ => more(s2, b2))
+# More bytes onto the buffer, waiting at most ms.
+def Conn.recv(-T: Type, s: Socket, ms: U32, buf: List<&2, U32>,
+  more: Socket -> List<&2, U32> -> IO(Res(T))) -> IO(Res(T)):
+  Conn.recv.n(T, s, ms, buf, s2 => b2 => _ => more(s2, b2))
 
-def Conn.sent(m: Sent(), k: Socket -> IO(Out())) -> IO(Out()):
+def Conn.sent(-T: Type, m: Sent(), k: Socket -> IO(Res(T))) -> IO(Res(T)):
   (s, r) = m
   match r:
     case Done{_}:
       k(s)
     case Fail{e}:
       (code, msg) = e
-      Conn.fail(s, code, "send: " ++ msg)
+      Conn.fail(T, s, Hangup{}, code, "send: " ++ msg)
 
-def Conn.send(s: Socket, bs: List<&2, U32>, k: Socket -> IO(Out())) -> IO(Out()):
-  do IO<Out()>:
+def Conn.send(-T: Type, s: Socket, bs: List<&2, U32>, k: Socket -> IO(Res(T))) ->
+  IO(Res(T)):
+  do IO<Res(T)>:
     m : Sent() <- X.Net.send(s, bs)
-    Conn.sent(m, k)
+    Conn.sent(T, m, k)
 
 # Text as bytes (a request's lines are ASCII).
-def Conn.say(s: Socket, text: String, k: Socket -> IO(Out())) -> IO(Out()):
-  Conn.send(s, B.Bytes.of(text), k)
+def Conn.say(-T: Type, s: Socket, text: String, k: Socket -> IO(Res(T))) -> IO(Res(T)):
+  Conn.send(T, s, B.Bytes.of(text), k)
 
-def Conn.wrote(m: Wrote(), s: Socket, k: Socket -> File -> IO(Out())) -> IO(Out()):
-  (f, r) = m
-  match r:
-    case Done{_}:
-      k(s, f)
-    case Fail{e}:
-      (code, msg) = e
-      do IO<Out()>:
-        File.close(f)
-        Conn.fail(s, code, "write: " ++ msg)
-
-# Bytes to the file (nothing to do for none).
-def Conn.save(bs: List<&2, U32>, s: Socket, f: File, k: Socket -> File -> IO(Out())) ->
-  IO(Out()):
-  match bs:
-    case Nil{}:
-      k(s, f)
-    case Con{h, t}:
-      do IO<Out()>:
-        m : Wrote() <- File.write_bytes(f, h <> t)
-        Conn.wrote(m, s, k)
-
-def Conn.bye.sent(m: Sent(), f: File, r: Out()) -> IO(Out()):
+def Conn.shut.sent(m: Sent()) -> IO(Unit):
   (s, _) = m
-  do IO<Out()>:
-    File.close(f)
-    X.Net.close(s)
-    IO.pure(Out(), r)
+  X.Net.close(s)
 
-# A last word to the server, sent or not, then both ends closed.
-def Conn.bye(s: Socket, text: String, f: File, r: Out()) -> IO(Out()):
-  do IO<Out()>:
-    m : Sent() <- X.Net.send(s, B.Bytes.of(text))
-    Conn.bye.sent(m, f, r)
+# A last word to the server, sent or not, and the socket closed.
+def Conn.shut(s: Socket, last: List<&2, U32>) -> IO(Unit):
+  match last:
+    case Nil{}:
+      X.Net.close(s)
+    case Con{h, t}:
+      do IO<Unit>:
+        m : Sent() <- X.Net.send(s, h <> t)
+        Conn.shut.sent(m)
 
-# Both ends closed, and the result.
-def Conn.close(s: Socket, f: File, r: Out()) -> IO(Out()):
-  do IO<Out()>:
-    File.close(f)
-    X.Net.close(s)
-    IO.pure(Out(), r)
-
-def Conn.due.at(late: Bool, s: Socket, f: File, p: Pulled,
-  stop: Socket -> File -> Pulled -> IO(Out()),
-  go: Socket -> File -> Pulled -> IO(Out())) -> IO(Out()):
-  match late:
-    case True{}:
-      stop(s, f, p)
-    case False{}:
-      go(s, f, p)
-
-# stop when the clock (IO.now's, ms) has reached until, else go.
-def Conn.due(until: Nat, s: Socket, f: File, p: Pulled,
-  stop: Socket -> File -> Pulled -> IO(Out()),
-  go: Socket -> File -> Pulled -> IO(Out())) -> IO(Out()):
-  do IO<Out()>:
-    now : Nat <- IO.now()
-    Conn.due.at(Nat.is_le(until, now), s, f, p, stop, go)
-
-def Conn.secured(m: Sent(), k: Socket -> IO(Out())) -> IO(Out()):
+def Conn.secured(-T: Type, m: Sent(), k: Socket -> IO(Res(T))) -> IO(Res(T)):
   (s, r) = m
   match r:
     case Done{_}:
       k(s)
     case Fail{e}:
       (code, msg) = e
-      Conn.fail(s, code, msg)
+      Conn.fail(T, s, Unsafe{}, code, msg)
 
-def Conn.ca(r: Result<&1, &1, U32 & String, String>) -> String:
-  match r:
-    case Done{path}:
-      path
-    case Fail{_}:
-      ""
-
-def Conn.opened(r: Result<&1, &1, U32 & String, Socket>, tls: Bool, host: String,
-  k: Socket -> IO(Out())) -> IO(Out()):
+def Conn.opened(-T: Type, r: Result<&1, &1, U32 & String, Socket>, tls: Bool,
+  host: String, ca: String, k: Socket -> IO(Res(T))) -> IO(Res(T)):
   match r tls:
     case Fail{e} _:
       (code, msg) = e
-      IO.pure(Out(), Fail{(code, "connect: " ++ msg)})
+      IO.pure(Res(T), Fail{Err{NoRoute{}, code, msg}})
     case Done{s} False{}:
       k(s)
     case Done{s} True{}:
-      do IO<Out()>:
-        ca : Result<&1, &1, U32 & String, String> <- IO.get_env("STREAM_CAFILE")
-        m : Sent() <- X.Net.tls(s, host, Conn.ca(ca), "", "")
-        Conn.secured(m, k)
+      do IO<Res(T)>:
+        m : Sent() <- X.Net.tls(s, host, ca, "", "")
+        Conn.secured(T, m, k)
 
 # A connection to host:port, under TLS when asked: the certificate is
 # checked against the host's name and the system's store, or the PEM
-# file the environment's STREAM_CAFILE names (for a server with a
-# certificate of its own making).
-def Conn.open(+host: String, port: U32, tls: Bool, k: Socket -> IO(Out())) -> IO(Out()):
-  do IO<Out()>:
+# file ca names (for a server with a certificate of its own making).
+def Conn.open(-T: Type, +host: String, port: U32, tls: Bool, ca: String,
+  k: Socket -> IO(Res(T))) -> IO(Res(T)):
+  do IO<Res(T)>:
     r : Result<&1, &1, U32 & String, Socket> <- X.Net.connect(host, port)
-    Conn.opened(r, tls, host, k)
+    Conn.opened(T, r, tls, host, ca, k)

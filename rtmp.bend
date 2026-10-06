@@ -1,4 +1,10 @@
-# RTMP client: play a stream into an FLV file.
+# RTMP client: a session that gives a stream's audio and video.
+#
+#   s <- Rtmp.open(N.Opts.new("rtmp://server/app/stream"))
+#   (s, tag) <- Rtmp.next(s)      as many times as wanted
+#   Rtmp.close(s)
+#
+# What goes on the wire:
 #
 #   C: C0 C1                    S: S0 S1 S2          C: C2
 #   C: Set Chunk Size, connect(app)                  S: _result
@@ -6,15 +12,13 @@
 #   C: play(stream), Set Buffer Length               S: onStatus Play.Start
 #   S: data (the metadata), audio and video messages
 #
-# Each of those messages is written as an FLV tag, as it came: the
-# codecs are whatever the server sends (H.264 and AAC as a rule), and
-# ffmpeg or a player reads the file. This file is the IO; the bytes and
-# their meaning are in rtmp_core.bend and amf.bend, which are pure.
+# A tag is one of those messages, in the form FLV keeps them: written
+# one after the other after a header they make an FLV file, and
+# flv.bend takes the frames out of them. This file is the IO; the bytes
+# and their meaning are in rtmp_core.bend and amf.bend, which are pure.
 #
-# The sockets are net.c's (see conn.bend): the host may be a name,
-# rtmps:// is RTMP under TLS, and a server silent for 10 seconds ends
-# the pull. A login goes in the URL's query, as servers that use one
-# expect (rtmp://host/app?user=...&pass=...).
+# rtmps:// is RTMP under TLS. A login goes in the URL's query, as the
+# servers that use one expect (rtmp://host/app?user=...&pass=...).
 import Base
 import ./bytes.bend as B
 import ./amf.bend as A
@@ -22,58 +26,61 @@ import ./rtmp_core.bend as K
 import ./rtsp_core.bend as C
 import ./conn.bend as N
 
-# The stream
-# ----------
+# An open session: the connection and what was read past the last tag,
+# the chunk streams' state, how long to wait for the server (ms), the
+# bytes received and how many of them were acknowledged.
+type Sess is Type:
+  Sess{sock: Socket, buf: List<&2, U32>, dec: K.Dec, wait: U32, rx: U32, acked: U32}
 
-# With nothing whole in the buffer: stop when the time is up; else an
-# acknowledgement when a megabyte came since the last (a server may
-# stop sending without them), and more bytes.
-def Rtmp.turn(up: Bool, due: Bool, buf: List<&2, U32>, s: Socket, f: File, +rx: U32,
-  acked: U32, p: N.Pulled,
-  again: List<&2, U32> -> Socket -> File -> U32 -> U32 -> N.Pulled -> IO(N.Out())) ->
-  IO(N.Out()):
-  match up due:
-    case True{} _:
-      N.Conn.close(s, f, Done{p})
-    case False{} True{}:
-      N.Conn.send(s, K.Rtmp.ack(rx), s2 => N.Conn.recv.n(s2, buf, s3 => b3 => n =>
-        again(b3, s3, f, U32.add(rx, n), rx, p)))
-    case False{} False{}:
-      N.Conn.recv.n(s, buf, s3 => b3 => n => again(b3, s3, f, U32.add(rx, n), acked, p))
+# How the steps inside end: a session opened, or a tag read.
+type End is Type:
+  Opened{s: Sess}
+  Next{s: Sess, t: K.Tag}
 
-# The loop: a media message into the file as a tag, a ping answered,
-# the rest passed over. rx: the bytes received; acked: at the last
-# acknowledgement.
-def Rtmp.loop(fuel: Nat, e: K.Ev, +st: K.Dec, +buf: List<&2, U32>, s: Socket, f: File,
-  +until: Nat, +rx: U32, +acked: U32, p: N.Pulled) -> IO(N.Out()):
+def Fin() -> Type:
+  N.Res(End)
+
+# Reading tags
+# ------------
+
+# With nothing whole in the buffer: an acknowledgement when a megabyte
+# came since the last (a server may stop sending without them), and
+# more bytes.
+def Rtmp.more(due: Bool, buf: List<&2, U32>, s: Socket, wait: U32, +rx: U32, acked: U32,
+  again: Socket -> List<&2, U32> -> U32 -> U32 -> IO(Fin())) -> IO(Fin()):
+  match due:
+    case True{}:
+      N.Conn.send(End, s, K.Rtmp.ack(rx), s2 => N.Conn.recv.n(End, s2, wait, buf,
+        s3 => b3 => n => again(s3, b3, U32.add(rx, n), rx)))
+    case False{}:
+      N.Conn.recv.n(End, s, wait, buf, s3 => b3 => n => again(s3, b3, U32.add(rx, n), acked))
+
+# Until a tag: a media message given, a ping answered, the rest passed
+# over.
+def Rtmp.loop(fuel: Nat, e: K.Ev, +st: K.Dec, buf: List<&2, U32>, s: Socket, +wait: U32,
+  +rx: U32, +acked: U32) -> IO(Fin()):
   match fuel e:
     case 0n _:
-      N.Conn.close(s, f, Done{p})
-    case 1n+q K.Media{typ, ts, payload, +st2, +rest}:
-      +tag = K.Flv.tag(typ, ts, payload)
-      N.Conn.save(tag, s, f, s2 => f2 => N.Conn.due(until, s2, f2,
-        N.Pulled.add(p, 1, B.Bytes.len(tag)), s3 => f3 => p3 => N.Conn.close(s3, f3, Done{p3}),
-        s3 => f3 => p3 => Rtmp.loop(q, K.Rtmp.event(st2, rest), st2, rest, s3, f3, until,
-          rx, acked, p3)))
+      N.Conn.fail(End, s, N.Garbled{}, 0, "no media in a very long stream of messages")
+    case 1n+q K.Media{typ, ts, payload, st2, rest}:
+      IO.pure(Fin(), Done{Next{Sess{s, rest, st2, wait, rx, acked}, K.Tag{typ, ts, payload}}})
     case 1n+q K.Ping{data, +st2, +rest}:
-      N.Conn.send(s, K.Rtmp.pong(data), s2 => Rtmp.loop(q, K.Rtmp.event(st2, rest), st2,
-        rest, s2, f, until, rx, acked, p))
+      N.Conn.send(End, s, K.Rtmp.pong(data), s2 => Rtmp.loop(q, K.Rtmp.event(st2, rest),
+        st2, rest, s2, wait, rx, acked))
     case 1n+q K.Over{_, _}:
-      N.Conn.close(s, f, Done{p})
+      N.Conn.fail(End, s, N.Ended{}, 0, "the publisher stopped")
     case 1n+q K.Refused{msg, _, _}:
-      N.Conn.close(s, f, Fail{(0, "play was refused: " ++ msg)})
+      N.Conn.fail(End, s, N.NoStream{}, 0, msg)
     case 1n+q K.Skip{+st2, +rest}:
-      Rtmp.loop(q, K.Rtmp.event(st2, rest), st2, rest, s, f, until, rx, acked, p)
+      Rtmp.loop(q, K.Rtmp.event(st2, rest), st2, rest, s, wait, rx, acked)
     case 1n+q K.Result{_, +st2, +rest}:
-      Rtmp.loop(q, K.Rtmp.event(st2, rest), st2, rest, s, f, until, rx, acked, p)
+      Rtmp.loop(q, K.Rtmp.event(st2, rest), st2, rest, s, wait, rx, acked)
     case 1n+q K.Error{_, +st2, +rest}:
-      Rtmp.loop(q, K.Rtmp.event(st2, rest), st2, rest, s, f, until, rx, acked, p)
+      Rtmp.loop(q, K.Rtmp.event(st2, rest), st2, rest, s, wait, rx, acked)
     case 1n+q K.Wait{}:
-      do IO<N.Out()>:
-        now : Nat <- IO.now()
-        Rtmp.turn(Nat.is_le(until, now), (U32.sub(rx, acked) >= 1000000 : U32), buf, s, f,
-          rx, acked, p, +b3 => s3 => f3 => +rx3 => +ack3 => p3 =>
-            Rtmp.loop(q, K.Rtmp.event(st, b3), st, b3, s3, f3, until, rx3, ack3, p3))
+      Rtmp.more((U32.sub(rx, acked) >= 1000000 : U32), buf, s, wait, rx, acked,
+        s3 => +b3 => +rx3 => +ack3 =>
+          Rtmp.loop(q, K.Rtmp.event(st, b3), st, b3, s3, wait, rx3, ack3))
 
 # Setting up
 # ----------
@@ -81,95 +88,129 @@ def Rtmp.loop(fuel: Nat, e: K.Ev, +st: K.Dec, +buf: List<&2, U32>, s: Socket, f:
 # The answer to a command: the next _result, with pings answered and
 # everything else passed over meanwhile.
 def Rtmp.await(fuel: Nat, e: K.Ev, +st: K.Dec, +buf: List<&2, U32>, s: Socket,
-  k: Socket -> K.Dec -> List<&2, U32> -> List<&2, A.Tok> -> IO(N.Out())) -> IO(N.Out()):
+  +wait: U32, k: Socket -> K.Dec -> List<&2, U32> -> List<&2, A.Tok> -> IO(Fin())) ->
+  IO(Fin()):
   match fuel e:
     case 0n _:
-      N.Conn.fail(s, 0, "no answer to a command")
+      N.Conn.fail(End, s, N.Garbled{}, 0, "no answer to a command")
     case 1n+p K.Result{ts, st2, rest}:
       k(s, st2, rest, ts)
     case 1n+p K.Error{msg, _, _}:
-      N.Conn.fail(s, 0, "refused: " ++ msg)
+      N.Conn.fail(End, s, N.Refused{}, 0, msg)
     case 1n+p K.Refused{msg, _, _}:
-      N.Conn.fail(s, 0, "refused: " ++ msg)
+      N.Conn.fail(End, s, N.Refused{}, 0, msg)
     case 1n+p K.Ping{data, +st2, +rest}:
-      N.Conn.send(s, K.Rtmp.pong(data), s2 =>
-        Rtmp.await(p, K.Rtmp.event(st2, rest), st2, rest, s2, k))
+      N.Conn.send(End, s, K.Rtmp.pong(data), s2 =>
+        Rtmp.await(p, K.Rtmp.event(st2, rest), st2, rest, s2, wait, k))
     case 1n+p K.Skip{+st2, +rest}:
-      Rtmp.await(p, K.Rtmp.event(st2, rest), st2, rest, s, k)
+      Rtmp.await(p, K.Rtmp.event(st2, rest), st2, rest, s, wait, k)
     case 1n+p K.Over{+st2, +rest}:
-      Rtmp.await(p, K.Rtmp.event(st2, rest), st2, rest, s, k)
+      Rtmp.await(p, K.Rtmp.event(st2, rest), st2, rest, s, wait, k)
     case 1n+p K.Media{_, _, _, +st2, +rest}:
-      Rtmp.await(p, K.Rtmp.event(st2, rest), st2, rest, s, k)
+      Rtmp.await(p, K.Rtmp.event(st2, rest), st2, rest, s, wait, k)
     case 1n+p K.Wait{}:
-      N.Conn.recv(s, buf, s2 => +b2 => Rtmp.await(p, K.Rtmp.event(st, b2), st, b2, s2, k))
+      N.Conn.recv(End, s, wait, buf, s2 => +b2 =>
+        Rtmp.await(p, K.Rtmp.event(st, b2), st, b2, s2, wait, k))
 
-def Rtmp.opened(r: Result<&1, &1, U32 & String, File>, s: Socket, +st: K.Dec,
-  +buf: List<&2, U32>, +now: Nat, ms: U32) -> IO(N.Out()):
-  match r:
-    case Fail{e}:
-      (code, msg) = e
-      N.Conn.fail(s, code, "cannot write the file: " ++ msg)
-    case Done{f}:
-      N.Conn.save(K.Flv.header(), s, f, s2 => f2 => Rtmp.loop(4000000000n,
-        K.Rtmp.event(st, buf), st, buf, s2, f2, Nat.add(now, U32.to_nat(ms)), 0, 0,
-        N.Pulled{0, 0, 13, "FLV"}))
-
-# play is sent: open the file, note the time, and take what comes.
-def Rtmp.start(s: Socket, st: K.Dec, buf: List<&2, U32>, path: String, ms: U32) ->
-  IO(N.Out()):
-  do IO<N.Out()>:
-    now : Nat <- IO.now()
-    f : Result<&1, &1, U32 & String, File> <- File.open(path, "w")
-    Rtmp.opened(f, s, st, buf, now, ms)
-
-# The stream is created: its id is the result's fourth value.
+# The stream is created (its id is the result's fourth value): play,
+# and the session is open.
 def Rtmp.created(s: Socket, st: K.Dec, buf: List<&2, U32>, ts: List<&2, A.Tok>,
-  stream: String, path: String, ms: U32) -> IO(N.Out()):
-  N.Conn.send(s, K.Rtmp.play(A.Amf.number(A.Amf.at(ts, 3n)), stream), s2 =>
-    Rtmp.start(s2, st, buf, path, ms))
+  stream: String, wait: U32) -> IO(Fin()):
+  N.Conn.send(End, s, K.Rtmp.play(A.Amf.number(A.Amf.at(ts, 3n)), stream), s2 =>
+    IO.pure(Fin(), Done{Opened{Sess{s2, buf, st, wait, 0, 0}}}))
 
 # Connected to the application: create a stream.
 def Rtmp.connected(s: Socket, +st: K.Dec, +buf: List<&2, U32>, stream: String,
-  path: String, ms: U32) -> IO(N.Out()):
-  N.Conn.send(s, K.Rtmp.create(), s2 => Rtmp.await(1000000n, K.Rtmp.event(st, buf), st,
-    buf, s2, s3 => st3 => b3 => ts => Rtmp.created(s3, st3, b3, ts, stream, path, ms)))
+  +wait: U32) -> IO(Fin()):
+  N.Conn.send(End, s, K.Rtmp.create(), s2 => Rtmp.await(1000000n, K.Rtmp.event(st, buf),
+    st, buf, s2, wait, s3 => st3 => b3 => ts => Rtmp.created(s3, st3, b3, ts, stream,
+      wait)))
 
 # The handshake's answer is here (or more of it is read): C2, our chunk
 # size, and connect.
 def Rtmp.shaking(fuel: Nat, h: K.Shake, buf: List<&2, U32>, s: Socket, +u: C.Url,
-  +w: K.Where, path: String, ms: U32) -> IO(N.Out()):
+  +w: K.Where, +wait: U32) -> IO(Fin()):
   match fuel h:
     case 0n _:
-      N.Conn.fail(s, 0, "the handshake did not end")
+      N.Conn.fail(End, s, N.Garbled{}, 0, "the handshake did not end")
     case 1n+p K.Early{}:
-      N.Conn.recv(s, buf, s2 => +b2 => Rtmp.shaking(p, K.Rtmp.shake(b2), b2, s2, u, w,
-        path, ms))
+      N.Conn.recv(End, s, wait, buf, s2 => +b2 =>
+        Rtmp.shaking(p, K.Rtmp.shake(b2), b2, s2, u, w, wait))
     case 1n+p K.Shake{c2, +rest}:
-      N.Conn.send(s, B.Bytes.cat(c2, B.Bytes.cat(K.Rtmp.chunk_size(K.Rtmp.out()),
+      N.Conn.send(End, s, B.Bytes.cat(c2, B.Bytes.cat(K.Rtmp.chunk_size(K.Rtmp.out()),
         K.Rtmp.connect(K.Where.app(w), C.Url.host.of(u), C.Url.port.of(u)))), s2 =>
-        Rtmp.await(1000000n, K.Rtmp.event(K.Dec.new(), rest), K.Dec.new(), rest, s2,
-          s3 => st3 => b3 => _ => Rtmp.connected(s3, st3, b3, K.Where.stream(w), path,
-            ms)))
+        Rtmp.await(1000000n, K.Rtmp.event(K.Dec.new(), rest), K.Dec.new(), rest, s2, wait,
+          s3 => st3 => b3 => _ => Rtmp.connected(s3, st3, b3, K.Where.stream(w), wait)))
 
-def Rtmp.go(bad: Bool, +u: C.Url, path: String, ms: U32, tls: Bool) -> IO(N.Out()):
+def Rtmp.go(bad: Bool, +u: C.Url, tls: Bool, o: N.Opts) -> IO(Fin()):
   match bad:
     case True{}:
-      IO.pure(N.Out(), Fail{(0, "not an RTMP URL (rtmp://host[:port]/app/stream)")})
+      IO.pure(Fin(), Fail{N.Err{N.BadUrl{}, 0,
+        "not an RTMP URL (rtmp://host[:port]/app/stream)"}})
     case False{}:
-      do IO<N.Out()>:
+      N.Opts{_, _, _, +wait, _, ca} = o
+      do IO<Fin()>:
         seed : U32 <- IO.try(U32, IO.random_u32())
-        N.Conn.open(C.Url.host.of(u), C.Url.port.of(u), tls, s =>
-          N.Conn.send(s, K.Rtmp.hello(seed), s2 => Rtmp.shaking(4096n, K.Early{}, Nil{},
-            s2, u, K.Where.of(C.Url.path(u)), path, ms)))
+        N.Conn.open(End, C.Url.host.of(u), C.Url.port.of(u), tls, ca, s =>
+          N.Conn.send(End, s, K.Rtmp.hello(seed), s2 => Rtmp.shaking(4096n, K.Early{},
+            Nil{}, s2, u, K.Where.of(C.Url.path(u)), wait)))
 
-def Rtmp.pull.url(+u: C.Url, path: String, ms: U32, tls: Bool) -> IO(N.Out()):
-  Rtmp.go(String.is_empty(C.Url.host.of(u)), u, path, ms, tls)
+def Rtmp.start.url(+u: C.Url, tls: Bool, o: N.Opts) -> IO(Fin()):
+  Rtmp.go(String.is_empty(C.Url.host.of(u)), u, tls, o)
 
-def Rtmp.pull.tls(+tls: Bool, url: String, path: String, ms: U32) -> IO(N.Out()):
-  Rtmp.pull.url(C.Url.of(url, Bool.pick(String, tls, "rtmps://", "rtmp://"),
-    Bool.pick(U32, tls, 443, 1935)), path, ms, tls)
+def Rtmp.start.tls(+tls: Bool, url: String, o: N.Opts) -> IO(Fin()):
+  Rtmp.start.url(C.Url.of(url, Bool.pick(String, tls, "rtmps://", "rtmp://"),
+    Bool.pick(U32, tls, 443, 1935)), tls, o)
 
-# Play the stream of an RTMP URL (rtmp://, or rtmps:// for TLS) into an
-# FLV file for ms milliseconds.
-def Rtmp.pull(+url: String, path: String, ms: U32) -> IO(N.Out()):
-  Rtmp.pull.tls(String.starts_with(String.to_lower(url), "rtmps://"), url, path, ms)
+def Rtmp.start(+o: N.Opts) -> IO(Fin()):
+  N.Opts{+url, _, _, _, _, _} = o
+  Rtmp.start.tls(String.starts_with(String.to_lower(url), "rtmps://"), url, o)
+
+# The public face
+# ---------------
+
+def Opened() -> Type:
+  Result<&1, &1, N.Err, Sess>
+
+def Read() -> Type:
+  Result<&1, &1, N.Err, Sess & K.Tag>
+
+def Rtmp.open.end(r: Fin()) -> Opened():
+  match r:
+    case Done{Opened{s}}:
+      Done{s}
+    case Done{Next{_, _}}:
+      Fail{N.Err{N.Garbled{}, 0, "a tag before the session was open"}}
+    case Fail{e}:
+      Fail{e}
+
+def Rtmp.next.end(r: Fin()) -> Read():
+  match r:
+    case Done{Next{s, t}}:
+      Done{(s, t)}
+    case Done{Opened{_}}:
+      Fail{N.Err{N.Garbled{}, 0, "the session opened twice"}}
+    case Fail{e}:
+      Fail{e}
+
+# Open a session: connect, shake hands, connect to the application and
+# ask to play the stream. On a failure the connection is already closed.
+def Rtmp.open(o: N.Opts) -> IO(Opened()):
+  do IO<Opened()>:
+    r : Fin() <- Rtmp.start(o)
+    IO.pure(Opened(), Rtmp.open.end(r))
+
+# The next tag, and the session to go on with. It waits for the server
+# at most the options' wait; on a failure (or at the stream's end, which
+# comes as the reason Ended) the connection is already closed.
+def Rtmp.next(x: Sess) -> IO(Read()):
+  Sess{s, +buf, +dec, wait, rx, acked} = x
+  do IO<Read()>:
+    r : Fin() <- Rtmp.loop(4000000000n, K.Rtmp.event(dec, buf), dec, buf, s, wait, rx,
+      acked)
+    IO.pure(Read(), Rtmp.next.end(r))
+
+# End the session: the connection closed.
+def Rtmp.close(x: Sess) -> IO(Unit):
+  Sess{s, _, _, _, _, _} = x
+  N.Conn.shut(s, Nil{})

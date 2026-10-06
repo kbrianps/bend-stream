@@ -94,10 +94,7 @@ pull() {
 # fails NAME URL WORDS: the pull ends in an error that says WORDS.
 fails() {
   out=$(timeout 60 "$T/pull" "$2" "$T/x" 2 2>&1 | tail -1)
-  case "$out" in
-    error*"$3"*) ok "$1" ;;
-    *) bad "$1: $out" ;;
-  esac
+  if echo "$out" | grep -q -E "^error.*($3)"; then ok "$1"; else bad "$1: $out"; fi
 }
 
 pull "rtsp: H.264 with a login" rtsp://cam:s3gredo@127.0.0.1:18554/priv a.h264 h264
@@ -118,19 +115,22 @@ for f in o.ts p.ts; do
   errs=$(ffmpeg -v error -i "$T/$f" -f null - 2>&1 | grep -v -c -i "non-existing\|no frame\|missing reference\|Could not find ref\|RPS\|POC")
   [ "$rate" = "25/1" ] && [ "$errs" = "0" ] && ok "ts: $f times and decodes" || bad "ts: $f rate $rate, $errs decode errors"
 done
-fails "rtsp: wrong password" rtsp://cam:errada@127.0.0.1:18554/priv "wrong user or password"
-fails "rtsp: no such path" rtsp://127.0.0.1:18554/nada "DESCRIBE was refused"
-fails "rtsp: nothing listening" rtsp://127.0.0.1:18999/x "connect"
-fails "not a URL" http://127.0.0.1/x "not an RTSP URL"
+fails "rtsp: wrong password" rtsp://cam:errada@127.0.0.1:18554/priv "login refused"
+fails "rtsp: no such path" rtsp://127.0.0.1:18554/nada "no such stream|refused"
+fails "rtsp: nothing listening" rtsp://127.0.0.1:18999/x "cannot connect"
+fails "not a URL" http://127.0.0.1/x "bad URL"
 pull "rtmp: video" rtmp://127.0.0.1:11935/open d.flv h264
 pull "rtmp: audio" rtmp://127.0.0.1:11935/open e.flv aac a
 pull "rtmp: a login in the query" "rtmp://127.0.0.1:11935/priv?user=cam&pass=s3gredo" f.flv h264
-fails "rtmp: no login" rtmp://127.0.0.1:11935/priv "closed"
-fails "rtmp: nothing listening" rtmp://127.0.0.1:11999/x "connect"
+pull "rtmp: into MPEG-TS, the video" rtmp://127.0.0.1:11935/open s.ts h264
+pull "rtmp: into MPEG-TS, the audio" rtmp://127.0.0.1:11935/open t.ts aac a
+pull "rtmp: the raw video" rtmp://127.0.0.1:11935/open u.h264 h264
+fails "rtmp: no login" rtmp://127.0.0.1:11935/priv "connection closed"
+fails "rtmp: nothing listening" rtmp://127.0.0.1:11999/x "cannot connect"
 pull "a host by name" rtsp://localhost:18554/open k.h264 h264
-fails "a name that does not exist" rtsp://nao-existe.invalid/x "connect"
-fails "rtsps: a certificate nobody vouches for" rtsps://localhost:18322/open "tls"
-fails "rtmps: a certificate nobody vouches for" rtmps://localhost:11936/open "tls"
+fails "a name that does not exist" rtsp://nao-existe.invalid/x "cannot connect"
+fails "rtsps: a certificate nobody vouches for" rtsps://localhost:18322/open "TLS failed"
+fails "rtmps: a certificate nobody vouches for" rtmps://localhost:11936/open "TLS failed"
 export STREAM_CAFILE="$T/cert.pem"
 pull "rtsps: TLS, the CA given" rtsps://localhost:18322/open l.h264 h264
 pull "rtsps: TLS with a login" rtsps://cam:s3gredo@localhost:18322/priv m.h264 h264
@@ -153,7 +153,7 @@ if [ -n "$OTHERS" ]; then
   pull "rtmp: SRS, audio" rtmp://127.0.0.1:11938/live/cam h.flv aac a
   pull "rtmp: nginx-rtmp, video" rtmp://127.0.0.1:11937/live/cam i.flv h264
   pull "rtmp: nginx-rtmp, audio" rtmp://127.0.0.1:11937/live/cam j.flv aac a
-  fails "rtmp: a stream nobody publishes (10 s)" rtmp://127.0.0.1:11938/live/nada "nothing for 10"
+  fails "rtmp: a stream nobody publishes (10 s)" rtmp://127.0.0.1:11938/live/nada "timed out"
 fi
 
 [ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
