@@ -16,6 +16,7 @@
 import Base
 import ./bytes.bend as B
 import ./conn.bend as N
+import ./opts.bend as E
 import ./frame.bend as F
 import ./rec.bend as W
 import ./rtsp.bend as S
@@ -36,9 +37,9 @@ def Stat.show(st: Stat, kind: String) -> String:
   Stat{n, b} = st
   "ok: " ++ kind ++ ", " ++ U32.show(n) ++ " frames, " ++ U32.show(b) ++ " bytes"
 
-def Pull.error(e: N.Err, st: Stat) -> String:
+def Pull.error(e: E.Err, st: Stat) -> String:
   Stat{+n, _} = st
-  "error: " ++ N.Err.show(e) ++ Bool.pick(String, U32.is_zero(n), "",
+  "error: " ++ E.Err.show(e) ++ Bool.pick(String, U32.is_zero(n), "",
     " (after " ++ U32.show(n) ++ " frames)")
 
 # Writing
@@ -144,7 +145,7 @@ def Pull.rtsp.opened(r: S.Opened(), out: String, ms: U32) -> IO(String):
     case Done{s}:
       Pull.rtsp.at(S.Rtsp.about(s), out, ms)
 
-def Pull.rtsp(o: N.Opts, out: String, ms: U32) -> IO(String):
+def Pull.rtsp(o: E.Opts, out: String, ms: U32) -> IO(String):
   do IO<String>:
     r : S.Opened() <- S.Rtsp.open(o)
     Pull.rtsp.opened(r, out, ms)
@@ -199,18 +200,18 @@ def Pull.rtmp.put(u: Sunk, s: M.Sess, f: File, until: Nat, st: Stat,
     s2 => f2 => st2 => again(s2, f2, k, st2))
 
 # The stream's end is no error when something was recorded.
-def Pull.rtmp.over(ended: Bool, e: N.Err, st: Stat) -> String:
+def Pull.rtmp.over(ended: Bool, e: E.Err, st: Stat) -> String:
   match ended:
     case True{}:
       Stat.show(st, "RTMP")
     case False{}:
       Pull.error(e, st)
 
-def Pull.rtmp.failed(+e: N.Err, f: File, st: Stat) -> IO(String):
-  N.Err{why, _, _} = e
+def Pull.rtmp.failed(+e: E.Err, f: File, st: Stat) -> IO(String):
+  E.Err{why, _, _} = e
   do IO<String>:
     File.close(f)
-    IO.pure(String, Pull.rtmp.over(N.Why.ended(why), e, st))
+    IO.pure(String, Pull.rtmp.over(E.Why.ended(why), e, st))
 
 def Pull.rtmp.got(r: M.Read(), f: File, k: Sink, until: Nat, st: Stat,
   again: M.Sess -> File -> Sink -> Stat -> IO(String)) -> IO(String):
@@ -254,7 +255,7 @@ def Pull.rtmp.opened(r: M.Opened(), +out: String, ms: U32) -> IO(String):
         f : Result<&1, &1, U32 & String, File> <- File.open(out, "w")
         Pull.rtmp.file(f, s, Sink.for(out), Nat.add(now, U32.to_nat(ms)))
 
-def Pull.rtmp(o: N.Opts, out: String, ms: U32) -> IO(String):
+def Pull.rtmp(o: E.Opts, out: String, ms: U32) -> IO(String):
   do IO<String>:
     r : M.Opened() <- M.Rtmp.open(o)
     Pull.rtmp.opened(r, out, ms)
@@ -283,7 +284,7 @@ def Pull.ca(r: Result<&1, &1, U32 & String, String>) -> String:
     case Fail{_}:
       ""
 
-def Pull.by(rtmp: Bool, o: N.Opts, out: String, ms: U32) -> IO(String):
+def Pull.by(rtmp: Bool, o: E.Opts, out: String, ms: U32) -> IO(String):
   match rtmp:
     case True{}:
       Pull.rtmp(o, out, ms)
@@ -296,7 +297,7 @@ def Pull.run(args: List<&2, String>) -> IO(Unit):
       do IO<Unit>:
         ca : Result<&1, &1, U32 & String, String> <- IO.get_env("STREAM_CAFILE")
         words : String <- Pull.by(String.starts_with(String.to_lower(url), "rtmp"),
-          N.Opts.ca(N.Opts.new(url), Pull.ca(ca)), out, (Pull.secs(rest) * 1000 : U32))
+          E.Opts.ca(E.Opts.new(url), Pull.ca(ca)), out, (Pull.secs(rest) * 1000 : U32))
         IO.print(words)
     case _:
       IO.print("usage: pull rtsp[s]://[user:pass@]host[:port]/path OUT [SECONDS]\n"

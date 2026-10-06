@@ -5,6 +5,7 @@
 import Base
 import ../bytes.bend as B
 import ../conn.bend as N
+import ../opts.bend as E
 import ../frame.bend as F
 import ../rtsp.bend as S
 
@@ -22,7 +23,7 @@ def Show.frame(f: F.Frame) -> String:
 def Show.got(r: S.Read(), again: S.Sess -> IO(Unit)) -> IO(Unit):
   match r:
     case Fail{e}:
-      IO.print(N.Err.show(e))
+      IO.print(E.Err.show(e))
     case Done{sf}:
       (s, f) = sf
       do IO<Unit>:
@@ -41,7 +42,7 @@ def Show.loop(n: Nat, s: S.Sess) -> IO(Unit):
 def Show.opened(r: S.Opened()) -> IO(Unit):
   match r:
     case Fail{e}:
-      IO.print(N.Err.show(e))
+      IO.print(E.Err.show(e))
     case Done{s}:
       Show.loop(50n, s)
 
@@ -49,7 +50,7 @@ def Show.run(args: List<String>) -> IO(Unit):
   match args:
     case Con{_, Con{url, _}}:
       do IO<Unit>:
-        r : S.Opened() <- S.Rtsp.open(N.Opts.new(url))
+        r : S.Opened() <- S.Rtsp.open(E.Opts.new(url))
         Show.opened(r)
     case _:
       IO.print("usage: frames rtsp://[user:pass@]host[:port]/path")

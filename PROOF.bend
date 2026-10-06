@@ -9,6 +9,7 @@ import ./rtmp_core.bend as K
 import ./rtp.bend as R
 import ./ts.bend as S
 import ./audio.bend as U
+import ./opts.bend as E
 import ./LAWS.bend as Laws
 
 # One cleaned char on a clean rest: a newline is dropped, any other
@@ -70,4 +71,7 @@ def Laws.aac_adts():
   {==}
 
 def Laws.aac_ticks():
+  {==}
+
+def Laws.retry_only_what_may_pass():
   {==}

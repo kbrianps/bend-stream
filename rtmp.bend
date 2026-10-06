@@ -1,6 +1,6 @@
 # RTMP client: a session that gives a stream's audio and video.
 #
-#   s <- Rtmp.open(N.Opts.new("rtmp://server/app/stream"))
+#   s <- Rtmp.open(E.Opts.new("rtmp://server/app/stream"))
 #   (s, tag) <- Rtmp.next(s)      as many times as wanted
 #   Rtmp.close(s)
 #
@@ -25,6 +25,7 @@ import ./amf.bend as A
 import ./rtmp_core.bend as K
 import ./rtsp_core.bend as C
 import ./conn.bend as N
+import ./opts.bend as E
 
 # An open session: the connection and what was read past the last tag,
 # the chunk streams' state, how long to wait for the server (ms), the
@@ -61,16 +62,16 @@ def Rtmp.loop(fuel: Nat, e: K.Ev, +st: K.Dec, buf: List<&2, U32>, s: Socket, +wa
   +rx: U32, +acked: U32) -> IO(Fin()):
   match fuel e:
     case 0n _:
-      N.Conn.fail(End, s, N.Garbled{}, 0, "no media in a very long stream of messages")
+      N.Conn.fail(End, s, E.Garbled{}, 0, "no media in a very long stream of messages")
     case 1n+q K.Media{typ, ts, payload, st2, rest}:
       IO.pure(Fin(), Done{Next{Sess{s, rest, st2, wait, rx, acked}, K.Tag{typ, ts, payload}}})
     case 1n+q K.Ping{data, +st2, +rest}:
       N.Conn.send(End, s, K.Rtmp.pong(data), s2 => Rtmp.loop(q, K.Rtmp.event(st2, rest),
         st2, rest, s2, wait, rx, acked))
     case 1n+q K.Over{_, _}:
-      N.Conn.fail(End, s, N.Ended{}, 0, "the publisher stopped")
+      N.Conn.fail(End, s, E.Ended{}, 0, "the publisher stopped")
     case 1n+q K.Refused{msg, _, _}:
-      N.Conn.fail(End, s, N.NoStream{}, 0, msg)
+      N.Conn.fail(End, s, E.NoStream{}, 0, msg)
     case 1n+q K.Skip{+st2, +rest}:
       Rtmp.loop(q, K.Rtmp.event(st2, rest), st2, rest, s, wait, rx, acked)
     case 1n+q K.Result{_, +st2, +rest}:
@@ -92,13 +93,13 @@ def Rtmp.await(fuel: Nat, e: K.Ev, +st: K.Dec, +buf: List<&2, U32>, s: Socket,
   IO(Fin()):
   match fuel e:
     case 0n _:
-      N.Conn.fail(End, s, N.Garbled{}, 0, "no answer to a command")
+      N.Conn.fail(End, s, E.Garbled{}, 0, "no answer to a command")
     case 1n+p K.Result{ts, st2, rest}:
       k(s, st2, rest, ts)
     case 1n+p K.Error{msg, _, _}:
-      N.Conn.fail(End, s, N.Refused{}, 0, msg)
+      N.Conn.fail(End, s, E.Refused{}, 0, msg)
     case 1n+p K.Refused{msg, _, _}:
-      N.Conn.fail(End, s, N.Refused{}, 0, msg)
+      N.Conn.fail(End, s, E.Refused{}, 0, msg)
     case 1n+p K.Ping{data, +st2, +rest}:
       N.Conn.send(End, s, K.Rtmp.pong(data), s2 =>
         Rtmp.await(p, K.Rtmp.event(st2, rest), st2, rest, s2, wait, k))
@@ -132,7 +133,7 @@ def Rtmp.shaking(fuel: Nat, h: K.Shake, buf: List<&2, U32>, s: Socket, +u: C.Url
   +w: K.Where, +wait: U32) -> IO(Fin()):
   match fuel h:
     case 0n _:
-      N.Conn.fail(End, s, N.Garbled{}, 0, "the handshake did not end")
+      N.Conn.fail(End, s, E.Garbled{}, 0, "the handshake did not end")
     case 1n+p K.Early{}:
       N.Conn.recv(End, s, wait, buf, s2 => +b2 =>
         Rtmp.shaking(p, K.Rtmp.shake(b2), b2, s2, u, w, wait))
@@ -142,45 +143,45 @@ def Rtmp.shaking(fuel: Nat, h: K.Shake, buf: List<&2, U32>, s: Socket, +u: C.Url
         Rtmp.await(1000000n, K.Rtmp.event(K.Dec.new(), rest), K.Dec.new(), rest, s2, wait,
           s3 => st3 => b3 => _ => Rtmp.connected(s3, st3, b3, K.Where.stream(w), wait)))
 
-def Rtmp.go(bad: Bool, +u: C.Url, tls: Bool, o: N.Opts) -> IO(Fin()):
+def Rtmp.go(bad: Bool, +u: C.Url, tls: Bool, o: E.Opts) -> IO(Fin()):
   match bad:
     case True{}:
-      IO.pure(Fin(), Fail{N.Err{N.BadUrl{}, 0,
+      IO.pure(Fin(), Fail{E.Err{E.BadUrl{}, 0,
         "not an RTMP URL (rtmp://host[:port]/app/stream)"}})
     case False{}:
-      N.Opts{_, _, _, +wait, _, ca} = o
+      E.Opts{_, _, _, +wait, _, ca} = o
       do IO<Fin()>:
         seed : U32 <- IO.try(U32, IO.random_u32())
         N.Conn.open(End, C.Url.host.of(u), C.Url.port.of(u), tls, ca, s =>
           N.Conn.send(End, s, K.Rtmp.hello(seed), s2 => Rtmp.shaking(4096n, K.Early{},
             Nil{}, s2, u, K.Where.of(C.Url.path(u)), wait)))
 
-def Rtmp.start.url(+u: C.Url, tls: Bool, o: N.Opts) -> IO(Fin()):
+def Rtmp.start.url(+u: C.Url, tls: Bool, o: E.Opts) -> IO(Fin()):
   Rtmp.go(String.is_empty(C.Url.host.of(u)), u, tls, o)
 
-def Rtmp.start.tls(+tls: Bool, url: String, o: N.Opts) -> IO(Fin()):
+def Rtmp.start.tls(+tls: Bool, url: String, o: E.Opts) -> IO(Fin()):
   Rtmp.start.url(C.Url.of(url, Bool.pick(String, tls, "rtmps://", "rtmp://"),
     Bool.pick(U32, tls, 443, 1935)), tls, o)
 
-def Rtmp.start(+o: N.Opts) -> IO(Fin()):
-  N.Opts{+url, _, _, _, _, _} = o
+def Rtmp.start(+o: E.Opts) -> IO(Fin()):
+  E.Opts{+url, _, _, _, _, _} = o
   Rtmp.start.tls(String.starts_with(String.to_lower(url), "rtmps://"), url, o)
 
 # The public face
 # ---------------
 
 def Opened() -> Type:
-  Result<&1, &1, N.Err, Sess>
+  Result<&1, &1, E.Err, Sess>
 
 def Read() -> Type:
-  Result<&1, &1, N.Err, Sess & K.Tag>
+  Result<&1, &1, E.Err, Sess & K.Tag>
 
 def Rtmp.open.end(r: Fin()) -> Opened():
   match r:
     case Done{Opened{s}}:
       Done{s}
     case Done{Next{_, _}}:
-      Fail{N.Err{N.Garbled{}, 0, "a tag before the session was open"}}
+      Fail{E.Err{E.Garbled{}, 0, "a tag before the session was open"}}
     case Fail{e}:
       Fail{e}
 
@@ -189,13 +190,13 @@ def Rtmp.next.end(r: Fin()) -> Read():
     case Done{Next{s, t}}:
       Done{(s, t)}
     case Done{Opened{_}}:
-      Fail{N.Err{N.Garbled{}, 0, "the session opened twice"}}
+      Fail{E.Err{E.Garbled{}, 0, "the session opened twice"}}
     case Fail{e}:
       Fail{e}
 
 # Open a session: connect, shake hands, connect to the application and
 # ask to play the stream. On a failure the connection is already closed.
-def Rtmp.open(o: N.Opts) -> IO(Opened()):
+def Rtmp.open(o: E.Opts) -> IO(Opened()):
   do IO<Opened()>:
     r : Fin() <- Rtmp.start(o)
     IO.pure(Opened(), Rtmp.open.end(r))

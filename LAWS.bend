@@ -11,6 +11,7 @@ import ./rtmp_core.bend as K
 import ./rtp.bend as R
 import ./ts.bend as S
 import ./audio.bend as U
+import ./opts.bend as E
 
 def Laws.nals(o: R.Out) -> List<&2, List<&2, U32>>:
   R.Out{n, _} = o
@@ -127,3 +128,16 @@ law aac_adts:
 law aac_ticks:
   {[U.Aud.ticks(44100, 44100), U.Aud.ticks(48000, 48000), U.Aud.ticks(8000, 8000),
     U.Aud.ticks(1024, 48000)] == [90000, 90000, 90000, 1920] : List<&2, U32>}
+
+# Errors
+# ------
+
+# LAW: a program is told to try again exactly when the network or the
+# server faltered, never after an answer that will not change.
+law retry_only_what_may_pass:
+  {[E.Why.again(E.NoRoute{}), E.Why.again(E.Silent{}), E.Why.again(E.Hangup{}),
+    E.Why.again(E.NoLogin{}), E.Why.again(E.NoStream{}), E.Why.again(E.Unsafe{}),
+    E.Why.again(E.Refused{}), E.Why.again(E.Garbled{}), E.Why.again(E.BadUrl{}),
+    E.Why.again(E.Ended{})]
+    == [True{}, True{}, True{}, False{}, False{}, False{}, False{}, False{}, False{},
+      False{}] : List<&2, Bool>}

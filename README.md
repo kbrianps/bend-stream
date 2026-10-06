@@ -43,13 +43,13 @@ A session gives frames; what to do with them is the program's business. Bend's f
 
 ```python
 import ./rtsp.bend as S
-import ./conn.bend as N
+import ./opts.bend as E
 import ./frame.bend as F
 
 # open: connect, log in, set the streams up, play
-r : S.Opened() <- S.Rtsp.open(N.Opts.new("rtsp://user:pass@camera/stream"))
+r : S.Opened() <- S.Rtsp.open(E.Opts.new("rtsp://user:pass@camera/stream"))
 #   Done{s}   a session
-#   Fail{e}   an N.Err: why, a code, words
+#   Fail{e}   an E.Err: why, a code, words
 
 # next: one frame, and the session to go on with
 r : S.Read() <- S.Rtsp.next(s)
@@ -62,11 +62,11 @@ S.Rtsp.close(s)
 
 [`examples/frames.bend`](examples/frames.bend) is that loop, whole, printing each frame; [`pull.bend`](pull.bend) is the recorder.
 
-**Options** (`conn.bend`): `N.Opts.new(url)`, then any of `N.Opts.login(o, user, pass)` (instead of the URL's), `N.Opts.wait(o, ms)` (how long the server may stay silent; 10 s), `N.Opts.audio(o, False{})` (video only), `N.Opts.ca(o, "ca.pem")` (the certificate to trust under TLS).
+**Options** (`opts.bend`): `E.Opts.new(url)`, then any of `E.Opts.login(o, user, pass)` (instead of the URL's), `E.Opts.wait(o, ms)` (how long the server may stay silent; 10 s), `E.Opts.audio(o, False{})` (video only), `E.Opts.ca(o, "ca.pem")` (the certificate to trust under TLS).
 
 **Frames** (`frame.bend`): `pts` is in 90 kHz ticks since the stream's first frame; `key` says a decoder can start there. `S.Rtsp.about(s)` gives the session back with an `F.Info`: the codec (`"H264"` or `"H265"`), the parameter sets the server announced, whether there is audio.
 
-**Errors** (`conn.bend`): an `N.Err{why, code, msg}`. `why` is what a program acts on:
+**Errors** (`opts.bend`): an `E.Err{why, code, msg}`. `why` is what a program acts on:
 
 | `why` | Meaning | What to do |
 |---|---|---|
@@ -81,7 +81,7 @@ S.Rtsp.close(s)
 | `Garbled` | what came is not the protocol | give up |
 | `BadUrl` | not a URL of this protocol | give up |
 
-`N.Err.show(e)` puts one in a line.
+`E.Err.show(e)` puts one in a line, and `E.Err.again(e)` says whether opening again may work (the first three).
 
 **Recording** (`rec.bend`): `W.Rec.for(path, info)` makes a recorder for the form the file's name asks for (`.ts`, or raw), and `W.Rec.put(rec, frame)` gives the bytes to write and the recorder to go on with.
 
@@ -100,7 +100,8 @@ S.Rtsp.close(s)
 | `amf.bend` | Pure: AMF0 |
 | `bytes.bend`, `text.bend`, `b64.bend`, `md5.bend` | Pure helpers |
 | `rtsp.bend`, `rtmp.bend` | The IO: the two sessions |
-| `conn.bend` | Options, errors, and a connection's reads and writes |
+| `opts.bend` | Pure: options, and errors with a reason |
+| `conn.bend` | A connection's opening, reads and writes |
 | `net.bend`, `net.c`, `net.js` | The sockets: names, TLS, deadlines (native only; the JS side refuses) |
 | `pull.bend`, `examples/` | The recorder, and smaller programs that use the library |
 | `LAWS.bend`, `PROOF.bend` | The laws and their proofs |

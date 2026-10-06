@@ -1,6 +1,6 @@
 # RTSP client (RFC 2326): a session that gives a camera's frames.
 #
-#   s <- Rtsp.open(N.Opts.new("rtsp://user:pass@camera/stream"))
+#   s <- Rtsp.open(E.Opts.new("rtsp://user:pass@camera/stream"))
 #   (s, frame) <- Rtsp.next(s)      as many times as wanted
 #   Rtsp.close(s)
 #
@@ -24,6 +24,7 @@ import ./bytes.bend as B
 import ./rtsp_core.bend as C
 import ./rtp.bend as R
 import ./conn.bend as N
+import ./opts.bend as E
 import ./depay.bend as D
 import ./audio.bend as U
 import ./frame.bend as F
@@ -95,7 +96,7 @@ def Rtsp.reply(fuel: Nat, m: C.Msg, buf: List<&2, U32>, s: Socket, +wait: U32,
       N.Conn.recv(End, s, wait, buf, s2 => +b2 =>
         Rtsp.reply(p, C.Rtsp.demux(b2), b2, s2, wait, k))
     case _ _:
-      N.Conn.fail(End, s, N.Garbled{}, 0, "the server sent something that is not RTSP")
+      N.Conn.fail(End, s, E.Garbled{}, 0, "the server sent something that is not RTSP")
 
 # Send a request and read its reply.
 def Rtsp.ask(s: Socket, +buf: List<&2, U32>, req: String, wait: U32,
@@ -138,7 +139,7 @@ def Rtsp.loop(fuel: Nat, m: C.Msg, buf: List<&2, U32>, s: Socket, asm: D.Asm, +c
   +ka: Nat, +cseq: U32, info: F.Info) -> IO(Fin()):
   match fuel m:
     case 0n _:
-      N.Conn.fail(End, s, N.Garbled{}, 0, "no frame in a very long stream of packets")
+      N.Conn.fail(End, s, E.Garbled{}, 0, "no frame in a very long stream of packets")
     case 1n+q C.Frame{chan, data, rest}:
       Rtsp.emit(Cfg.put(c, chan, data, asm), s, rest, c, ka, cseq, info,
         s2 => +r2 => asm2 => i2 =>
@@ -146,7 +147,7 @@ def Rtsp.loop(fuel: Nat, m: C.Msg, buf: List<&2, U32>, s: Socket, asm: D.Asm, +c
     case 1n+q C.Reply{_, +rest}:
       Rtsp.loop(q, C.Rtsp.demux(rest), rest, s, asm, c, ka, cseq, info)
     case 1n+q C.Bad{}:
-      N.Conn.fail(End, s, N.Garbled{}, 0, "lost the stream's framing")
+      N.Conn.fail(End, s, E.Garbled{}, 0, "lost the stream's framing")
     case 1n+q C.Need{}:
       do IO<Fin()>:
         now : Nat <- IO.now()
@@ -172,7 +173,7 @@ def Rtsp.play.got(ok: Bool, r: C.Resp, s: Socket, buf: List<&2, U32>, +c: Cfg,
       IO.pure(Fin(), Done{Opened{Sess{s, buf, asm, c, Nat.add(now, Cfg.every(c)), next,
         Nil{}, info}}})
     case False{}:
-      N.Conn.fail(End, s, N.Refused{}, C.Resp.code(r), "PLAY was refused")
+      N.Conn.fail(End, s, E.Refused{}, C.Resp.code(r), "PLAY was refused")
 
 # PLAY, and the session is open.
 def Rtsp.play(s: Socket, buf: List<&2, U32>, +c: Cfg, +next: U32, asm: D.Asm,
@@ -215,10 +216,10 @@ def Rtsp.audio(want: Bool, s: Socket, buf: List<&2, U32>, +c: Cfg, +m: C.Media,
 
 def Rtsp.setup.got(ok: Bool, +r: C.Resp, s: Socket, buf: List<&2, U32>, +m: C.Media,
   uri: String, +chal: C.Chal, +user: String, +pass: String, +cnonce: String,
-  a: C.Media, aurl: String, +o: N.Opts) -> IO(Fin()):
+  a: C.Media, aurl: String, +o: E.Opts) -> IO(Fin()):
   match ok:
     case True{}:
-      N.Opts{_, _, _, +wait, audio, _} = o
+      E.Opts{_, _, _, +wait, audio, _} = o
       +session = C.Rtsp.session(C.Resp.get(r, "session"))
       +aud = U.Aud.of(a)
       Rtsp.audio(audio && U.Aud.on(aud), s, buf,
@@ -228,20 +229,20 @@ def Rtsp.setup.got(ok: Bool, +r: C.Resp, s: Socket, buf: List<&2, U32>, +m: C.Me
         C.Rtsp.signed(chal, user, pass, "SETUP", aurl, 4, cnonce, session,
           [C.Hdr{"Transport", "RTP/AVP/TCP;unicast;interleaved=2-3"}]))
     case False{}:
-      N.Conn.fail(End, s, N.Refused{}, C.Resp.code(r), "SETUP was refused (the server "
+      N.Conn.fail(End, s, E.Refused{}, C.Resp.code(r), "SETUP was refused (the server "
         ++ "may not do RTP over the RTSP connection)")
 
 # SETUP for the video's track, RTP interleaved on channels 0 and 1.
 def Rtsp.setup(problem: String, s: Socket, buf: List<&2, U32>, +m: C.Media,
   +base: String, +sdp: C.Sdp, +chal: C.Chal, +user: String, +pass: String,
-  +cnonce: String, +a: C.Media, +o: N.Opts) -> IO(Fin()):
+  +cnonce: String, +a: C.Media, +o: E.Opts) -> IO(Fin()):
   match problem:
     case SCon{h, t}:
-      N.Conn.fail(End, s, N.Refused{}, 0, SCon{h, t})
+      N.Conn.fail(End, s, E.Refused{}, 0, SCon{h, t})
     case SNil{}:
       Rtsp.ask(s, buf, C.Rtsp.signed(chal, user, pass, "SETUP",
         C.Rtsp.control(base, C.Media.control(m)), 3, cnonce, "",
-        [C.Hdr{"Transport", "RTP/AVP/TCP;unicast;interleaved=0-1"}]), N.Opts.wait.of(o),
+        [C.Hdr{"Transport", "RTP/AVP/TCP;unicast;interleaved=0-1"}]), E.Opts.wait.of(o),
         s2 => b2 => +r => Rtsp.setup.got(U32.is_eq(C.Resp.code(r), 200), r, s2, b2, m,
           C.Rtsp.control(base, C.Sdp.session(sdp)), chal, user, pass, cnonce, a,
           C.Rtsp.control(base, C.Media.control(a)), o))
@@ -249,7 +250,7 @@ def Rtsp.setup(problem: String, s: Socket, buf: List<&2, U32>, +m: C.Media,
 # The description is here: its video stream, and the URL its control
 # attributes are relative to (Content-Base, else the request's).
 def Rtsp.described(+r: C.Resp, s: Socket, buf: List<&2, U32>, +uri: String,
-  chal: C.Chal, user: String, pass: String, cnonce: String, o: N.Opts) -> IO(Fin()):
+  chal: C.Chal, user: String, pass: String, cnonce: String, o: E.Opts) -> IO(Fin()):
   +sdp = C.Sdp.of(B.Bytes.text(C.Resp.body(r)))
   +m = C.Sdp.media(sdp, "video")
   +cb = C.Resp.get(r, "content-base")
@@ -263,9 +264,9 @@ def Rtsp.describe.req(chal: C.Chal, user: String, pass: String, +uri: String, cs
 
 # Why a DESCRIBE was refused: a login (401, 403), no such stream (404),
 # or something else.
-def Rtsp.why(+code: U32) -> N.Why:
-  Bool.pick(N.Why, U32.is_eq(code, 401) || U32.is_eq(code, 403), N.NoLogin{},
-    Bool.pick(N.Why, U32.is_eq(code, 404), N.NoStream{}, N.Refused{}))
+def Rtsp.why(+code: U32) -> E.Why:
+  Bool.pick(E.Why, U32.is_eq(code, 401) || U32.is_eq(code, 403), E.NoLogin{},
+    Bool.pick(E.Why, U32.is_eq(code, 404), E.NoStream{}, E.Refused{}))
 
 def Rtsp.words(+code: U32) -> String:
   Bool.pick(String, U32.is_eq(code, 401) || U32.is_eq(code, 403),
@@ -277,7 +278,7 @@ def Rtsp.refused(s: Socket, +code: U32) -> IO(Fin()):
   N.Conn.fail(End, s, Rtsp.why(code), code, Rtsp.words(code))
 
 def Rtsp.again.got(ok: Bool, +r: C.Resp, s: Socket, buf: List<&2, U32>, uri: String,
-  chal: C.Chal, user: String, pass: String, cnonce: String, o: N.Opts) -> IO(Fin()):
+  chal: C.Chal, user: String, pass: String, cnonce: String, o: E.Opts) -> IO(Fin()):
   match ok:
     case True{}:
       Rtsp.described(r, s, buf, uri, chal, user, pass, cnonce, o)
@@ -287,24 +288,24 @@ def Rtsp.again.got(ok: Bool, +r: C.Resp, s: Socket, buf: List<&2, U32>, uri: Str
 # DESCRIBE again, answering the challenge; a server with none we can
 # answer ends it.
 def Rtsp.again(none: Bool, s: Socket, buf: List<&2, U32>, +uri: String, +chal: C.Chal,
-  +user: String, +pass: String, +cnonce: String, +o: N.Opts) -> IO(Fin()):
+  +user: String, +pass: String, +cnonce: String, +o: E.Opts) -> IO(Fin()):
   match none:
     case True{}:
-      N.Conn.fail(End, s, N.NoLogin{}, 401, "the server wants a login this client "
+      N.Conn.fail(End, s, E.NoLogin{}, 401, "the server wants a login this client "
         ++ "cannot give (Basic, or Digest with MD5)")
     case False{}:
       Rtsp.ask(s, buf, Rtsp.describe.req(chal, user, pass, uri, 2, cnonce),
-        N.Opts.wait.of(o), s2 => b2 => +r =>
+        E.Opts.wait.of(o), s2 => b2 => +r =>
           Rtsp.again.got(U32.is_eq(C.Resp.code(r), 200), r, s2, b2, uri, chal, user,
             pass, cnonce, o))
 
 def Rtsp.again.with(+chal: C.Chal, s: Socket, buf: List<&2, U32>, uri: String,
-  user: String, pass: String, cnonce: String, o: N.Opts) -> IO(Fin()):
+  user: String, pass: String, cnonce: String, o: E.Opts) -> IO(Fin()):
   Rtsp.again(String.is_empty(C.Chal.scheme(chal)), s, buf, uri, chal, user, pass, cnonce,
     o)
 
 def Rtsp.first.got(ok: Bool, login: Bool, +r: C.Resp, s: Socket, buf: List<&2, U32>,
-  uri: String, user: String, pass: String, cnonce: String, o: N.Opts) -> IO(Fin()):
+  uri: String, user: String, pass: String, cnonce: String, o: E.Opts) -> IO(Fin()):
   match ok login:
     case True{} _:
       Rtsp.described(r, s, buf, uri, C.Chal.none(), user, pass, cnonce, o)
@@ -316,9 +317,9 @@ def Rtsp.first.got(ok: Bool, login: Bool, +r: C.Resp, s: Socket, buf: List<&2, U
 
 # DESCRIBE with no login first: a 401 names the challenge to answer.
 def Rtsp.describe(s: Socket, +uri: String, +user: String, +pass: String,
-  +cnonce: String, +o: N.Opts) -> IO(Fin()):
+  +cnonce: String, +o: E.Opts) -> IO(Fin()):
   Rtsp.ask(s, Nil{}, Rtsp.describe.req(C.Chal.none(), user, pass, uri, 1, cnonce),
-    N.Opts.wait.of(o), s2 => b2 => +r => Rtsp.first.got(U32.is_eq(C.Resp.code(r), 200),
+    E.Opts.wait.of(o), s2 => b2 => +r => Rtsp.first.got(U32.is_eq(C.Resp.code(r), 200),
       U32.is_eq(C.Resp.code(r), 401), r, s2, b2, uri, user, pass, cnonce, o))
 
 # The options' login, or the URL's when they have none.
@@ -329,13 +330,13 @@ def Rtsp.pick(mine: String, theirs: String) -> String:
     case SCon{h, t}:
       SCon{h, t}
 
-def Rtsp.go(bad: Bool, +u: C.Url, +tls: Bool, +o: N.Opts) -> IO(Fin()):
+def Rtsp.go(bad: Bool, +u: C.Url, +tls: Bool, +o: E.Opts) -> IO(Fin()):
   match bad:
     case True{}:
-      IO.pure(Fin(), Fail{N.Err{N.BadUrl{}, 0,
+      IO.pure(Fin(), Fail{E.Err{E.BadUrl{}, 0,
         "not an RTSP URL (rtsp://[user:pass@]host[:port]/path)"}})
     case False{}:
-      N.Opts{_, user, pass, _, _, ca} = o
+      E.Opts{_, user, pass, _, _, ca} = o
       do IO<Fin()>:
         a : U32 <- IO.try(U32, IO.random_u32())
         b : U32 <- IO.try(U32, IO.random_u32())
@@ -344,32 +345,32 @@ def Rtsp.go(bad: Bool, +u: C.Url, +tls: Bool, +o: N.Opts) -> IO(Fin()):
             Rtsp.pick(user, C.Url.user(u)), Rtsp.pick(pass, C.Url.pass(u)),
             U32.show(a) ++ U32.show(b), o))
 
-def Rtsp.start.url(+u: C.Url, tls: Bool, o: N.Opts) -> IO(Fin()):
+def Rtsp.start.url(+u: C.Url, tls: Bool, o: E.Opts) -> IO(Fin()):
   Rtsp.go(String.is_empty(C.Url.host.of(u)), u, tls, o)
 
-def Rtsp.start.tls(+tls: Bool, +url: String, o: N.Opts) -> IO(Fin()):
+def Rtsp.start.tls(+tls: Bool, +url: String, o: E.Opts) -> IO(Fin()):
   Rtsp.start.url(C.Url.of(url, Bool.pick(String, tls, "rtsps://", "rtsp://"),
     Bool.pick(U32, tls, 322, 554)), tls, o)
 
-def Rtsp.start(+o: N.Opts) -> IO(Fin()):
-  N.Opts{+url, _, _, _, _, _} = o
+def Rtsp.start(+o: E.Opts) -> IO(Fin()):
+  E.Opts{+url, _, _, _, _, _} = o
   Rtsp.start.tls(String.starts_with(String.to_lower(url), "rtsps://"), url, o)
 
 # The public face
 # ---------------
 
 def Opened() -> Type:
-  Result<&1, &1, N.Err, Sess>
+  Result<&1, &1, E.Err, Sess>
 
 def Read() -> Type:
-  Result<&1, &1, N.Err, Sess & F.Frame>
+  Result<&1, &1, E.Err, Sess & F.Frame>
 
 def Rtsp.open.end(r: Fin()) -> Opened():
   match r:
     case Done{Opened{s}}:
       Done{s}
     case Done{Next{_, _}}:
-      Fail{N.Err{N.Garbled{}, 0, "a frame before the session was open"}}
+      Fail{E.Err{E.Garbled{}, 0, "a frame before the session was open"}}
     case Fail{e}:
       Fail{e}
 
@@ -378,13 +379,13 @@ def Rtsp.next.end(r: Fin()) -> Read():
     case Done{Next{s, f}}:
       Done{(s, f)}
     case Done{Opened{_}}:
-      Fail{N.Err{N.Garbled{}, 0, "the session opened twice"}}
+      Fail{E.Err{E.Garbled{}, 0, "the session opened twice"}}
     case Fail{e}:
       Fail{e}
 
 # Open a session: connect, log in, set the streams up and play. On a
 # failure the connection is already closed.
-def Rtsp.open(o: N.Opts) -> IO(Opened()):
+def Rtsp.open(o: E.Opts) -> IO(Opened()):
   do IO<Opened()>:
     r : Fin() <- Rtsp.start(o)
     IO.pure(Opened(), Rtsp.open.end(r))
