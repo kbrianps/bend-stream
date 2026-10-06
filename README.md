@@ -27,7 +27,7 @@ ok: H264, 144 packets, 520 units, 142543 bytes
 - SDP: picks the video stream and its control URL.
 - RTP over the RTSP connection (interleaved TCP).
 - H.264 (RFC 6184: single units, STAP-A, FU-A) and H.265 (RFC 7798: single units, aggregation packets, fragmentation units).
-- Writes the raw stream in Annex B form, the parameter sets of the SDP first (`ffplay out.h264` plays it); or, to a file named `.ts`, MPEG-TS with the time of each picture, which is what a recording wants.
+- Writes the raw stream in Annex B form, the parameter sets of the SDP first (`ffplay out.h264` plays it); or, to a file named `.ts`, MPEG-TS with the time of each picture, which is what a recording wants. A TS also takes the audio when it is AAC (RFC 3640).
 
 **RTMP**
 
@@ -56,7 +56,7 @@ The result is `Done{Pulled{packets, units, bytes, kind}}` or `Fail{(code, messag
 |---|---|
 | `rtsp_core.bend` | Pure: URLs, requests, replies and interleaved frames, authentication, SDP |
 | `rtp.bend` | Pure: RTP packets, H.264 and H.265 units, Annex B |
-| `mux.bend`, `ts.bend` | Pure: access units and MPEG-TS (PAT, PMT, PES, the clock) |
+| `mux.bend`, `ts.bend`, `audio.bend` | Pure: access units, MPEG-TS (PAT, PMT, PES, the clock), AAC with ADTS headers |
 | `rtmp_core.bend` | Pure: handshake, chunks, commands, what a message means, FLV |
 | `amf.bend` | Pure: AMF0 |
 | `bytes.bend`, `text.bend`, `b64.bend`, `md5.bend` | Pure helpers |
@@ -88,7 +88,8 @@ Beyond the script, the RTSP client was run against real recorders: an Intelbras 
 
 ## Limits
 
-- RTSP: only RTP over the RTSP connection (no UDP), and only the video stream.
+- RTSP: only RTP over the RTSP connection (no UDP). Audio only as AAC and only into a TS: G.711, which many cameras send, is left out.
+- Sound and picture are lined up by their first packets, not by RTCP sender reports.
 - RTMP: playing only, no publishing. A missing login shows as "the server closed the connection".
 - The TS takes the RTP timestamp for both the presentation and the decoding time, which is wrong for a stream with B-frames (cameras rarely make them).
 - The FLV keeps the server's timestamps, so it may not start at zero.

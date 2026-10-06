@@ -10,6 +10,7 @@ import ./rtsp_core.bend as C
 import ./rtmp_core.bend as K
 import ./rtp.bend as R
 import ./ts.bend as S
+import ./audio.bend as U
 
 def Laws.nals(o: R.Out) -> List<&2, List<&2, U32>>:
   R.Out{n, _} = o
@@ -111,3 +112,18 @@ law ts_whole_packets:
 # LAW: a time is the 5 bytes of a PTS (1 second: 90000 ticks).
 law ts_pts:
   {S.Pes.pts(90000, Nil{}) == [33, 0, 5, 191, 33] : List<&2, U32>}
+
+# Audio
+# -----
+
+# LAW: the configuration 1208 is AAC-LC, 44100 Hz, one channel, and a
+# frame of 100 bytes gets the ADTS header that says so and 107 bytes.
+law aac_adts:
+  {[U.Aud.hex("1208", Nil{}), U.Aud.adts(100, 2, 4, 1)]
+    == [[18, 8], [255, 241, 80, 64, 13, 127, 252]] : List<&2, List<&2, U32>>}
+
+# LAW: a second of any clock is 90000 ticks, and a frame of 1024
+# samples at 48 kHz is 1920.
+law aac_ticks:
+  {[U.Aud.ticks(44100, 44100), U.Aud.ticks(48000, 48000), U.Aud.ticks(8000, 8000),
+    U.Aud.ticks(1024, 48000)] == [90000, 90000, 90000, 1920] : List<&2, U32>}

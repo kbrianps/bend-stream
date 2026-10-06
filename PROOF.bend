@@ -8,6 +8,7 @@ import ./rtsp_core.bend as C
 import ./rtmp_core.bend as K
 import ./rtp.bend as R
 import ./ts.bend as S
+import ./audio.bend as U
 import ./LAWS.bend as Laws
 
 # One cleaned char on a clean rest: a newline is dropped, any other
@@ -63,4 +64,10 @@ def Laws.ts_whole_packets():
   {==}
 
 def Laws.ts_pts():
+  {==}
+
+def Laws.aac_adts():
+  {==}
+
+def Laws.aac_ticks():
   {==}

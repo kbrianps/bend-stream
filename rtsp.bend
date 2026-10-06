@@ -23,6 +23,7 @@ import ./rtsp_core.bend as C
 import ./rtp.bend as R
 import ./conn.bend as N
 import ./mux.bend as M
+import ./audio.bend as U
 
 # What the loop needs to know: H.265 or H.264, the payload type, when to
 # stop (IO.now's clock, ms), and how to sign a request.
@@ -76,18 +77,18 @@ def Rtsp.ask(s: Socket, +buf: List<&2, U32>, req: String,
 # The stream
 # ----------
 
-# What a channel's packet gives the file: only channel 0's RTP packets
-# of the video's payload type count.
-def Rtsp.put(video: Bool, data: List<&2, U32>, pt: U32, st: M.Mux) -> M.Put:
-  match video:
+# What a channel's packet gives the file: channel 0 is the video's RTP,
+# channel 2 the audio's; 1 and 3 are their RTCP, which is not read.
+def Rtsp.put(rtp: Bool, sound: Bool, data: List<&2, U32>, pt: U32, st: M.Mux) -> M.Put:
+  match rtp:
     case True{}:
-      M.Mux.packet(R.Rtp.of(data), pt, st)
+      M.Mux.packet(R.Rtp.of(data), pt, sound, st)
     case False{}:
       M.Put{Nil{}, 0, st}
 
-def Cfg.put(c: Cfg, chan: U32, data: List<&2, U32>, st: M.Mux) -> M.Put:
+def Cfg.put(c: Cfg, +chan: U32, data: List<&2, U32>, st: M.Mux) -> M.Put:
   Cfg{_, pt, _, _, _, _, _, _, _, _, _} = c
-  Rtsp.put(U32.is_zero(chan), data, pt, st)
+  Rtsp.put(U32.is_zero(chan) || U32.is_eq(chan, 2), U32.is_eq(chan, 2), data, pt, st)
 
 def Cfg.h265(c: Cfg) -> Bool:
   Cfg{x, _, _, _, _, _, _, _, _, _, _} = c
@@ -160,11 +161,11 @@ def Rtsp.loop(fuel: Nat, m: C.Msg, buf: List<&2, U32>, s: Socket, f: File,
 # ----------
 
 def Rtsp.play.got(ok: Bool, r: C.Resp, s: Socket, +buf: List<&2, U32>, f: File,
-  +c: Cfg, +now: Nat, head: U32, mux: M.Mux) -> IO(N.Out()):
+  +c: Cfg, +now: Nat, head: U32, mux: M.Mux, next: U32) -> IO(N.Out()):
   match ok:
     case True{}:
       Rtsp.loop(4000000000n, C.Rtsp.demux(buf), buf, s, f, mux, c,
-        Nat.add(now, Cfg.every(c)), 5, N.Pulled{0, 0, head, Cfg.codec(c)})
+        Nat.add(now, Cfg.every(c)), next, N.Pulled{0, 0, head, Cfg.codec(c)})
     case False{}:
       do IO<N.Out()>:
         File.close(f)
@@ -172,13 +173,14 @@ def Rtsp.play.got(ok: Bool, r: C.Resp, s: Socket, +buf: List<&2, U32>, f: File,
 
 # PLAY, once the file is open.
 def Rtsp.play(s: Socket, buf: List<&2, U32>, f: File, +c: Cfg, +now: Nat,
-  head: U32, mux: M.Mux) -> IO(N.Out()):
-  Rtsp.ask(s, buf, Cfg.request(c, "PLAY", 4), s2 => b2 => +r =>
-    Rtsp.play.got(U32.is_eq(C.Resp.code(r), 200), r, s2, b2, f, c, now, head, mux))
+  head: U32, mux: M.Mux, +next: U32) -> IO(N.Out()):
+  Rtsp.ask(s, buf, Cfg.request(c, "PLAY", next), s2 => b2 => +r =>
+    Rtsp.play.got(U32.is_eq(C.Resp.code(r), 200), r, s2, b2, f, c, now, head, mux,
+      U32.add(next, 1)))
 
 def Rtsp.opened(r: Result<&1, &1, U32 & String, File>, s: Socket,
-  buf: List<&2, U32>, +c: Cfg, +sets: List<&2, U32>, now: Nat, +ts: Bool) ->
-  IO(N.Out()):
+  buf: List<&2, U32>, +c: Cfg, +sets: List<&2, U32>, now: Nat, +ts: Bool,
+  aud: U.Aud, next: U32) -> IO(N.Out()):
   match r:
     case Fail{e}:
       (code, msg) = e
@@ -189,26 +191,47 @@ def Rtsp.opened(r: Result<&1, &1, U32 & String, File>, s: Socket,
       +first = Bool.pick(List<&2, U32>, ts, Nil{}, sets)
       N.Conn.save(first, s, f, s2 => f2 => Rtsp.play(s2, buf, f2, c, now,
         B.Bytes.len(first), M.Mux.new(ts, Cfg.h265(c),
-          Bool.pick(List<&2, U32>, ts, sets, Nil{}))))
+          Bool.pick(List<&2, U32>, ts, sets, Nil{}), aud), next))
+
+def Rtsp.ts(path: String) -> Bool:
+  String.ends_with(String.to_lower(path), ".ts")
 
 def Rtsp.start.at(+now: Nat, f: Result<&1, &1, U32 & String, File>, s: Socket,
-  buf: List<&2, U32>, ms: U32, cfg: Nat -> Cfg, sets: List<&2, U32>, ts: Bool) ->
-  IO(N.Out()):
-  Rtsp.opened(f, s, buf, cfg(Nat.add(now, U32.to_nat(ms))), sets, now, ts)
+  buf: List<&2, U32>, ms: U32, cfg: Nat -> Cfg, sets: List<&2, U32>, ts: Bool,
+  aud: U.Aud, next: U32) -> IO(N.Out()):
+  Rtsp.opened(f, s, buf, cfg(Nat.add(now, U32.to_nat(ms))), sets, now, ts, aud, next)
 
 # The session is set up: open the file (a name in .ts asks for MPEG-TS),
 # note the time, play.
 def Rtsp.start(s: Socket, buf: List<&2, U32>, +path: String, +ms: U32,
-  cfg: Nat -> Cfg, sets: List<&2, U32>) -> IO(N.Out()):
+  cfg: Nat -> Cfg, sets: List<&2, U32>, aud: U.Aud, next: U32) -> IO(N.Out()):
   do IO<N.Out()>:
     now : Nat <- IO.now()
     f : Result<&1, &1, U32 & String, File> <- File.open(path, "w")
-    Rtsp.start.at(now, f, s, buf, ms, cfg, sets,
-      String.ends_with(String.to_lower(path), ".ts"))
+    Rtsp.start.at(now, f, s, buf, ms, cfg, sets, Rtsp.ts(path), aud, next)
+
+def Rtsp.audio.got(ok: Bool, s: Socket, buf: List<&2, U32>, path: String, ms: U32,
+  cfg: Nat -> Cfg, sets: List<&2, U32>, aud: U.Aud) -> IO(N.Out()):
+  match ok:
+    case True{}:
+      Rtsp.start(s, buf, path, ms, cfg, sets, aud, 5)
+    case False{}:
+      Rtsp.start(s, buf, path, ms, cfg, sets, U.Aud.none(), 5)
+
+# The audio's track too, on channels 2 and 3, when the file is a TS and
+# the audio is AAC; a server that refuses it gives the video alone.
+def Rtsp.audio(want: Bool, s: Socket, buf: List<&2, U32>, path: String, ms: U32,
+  cfg: Nat -> Cfg, sets: List<&2, U32>, aud: U.Aud, req: String) -> IO(N.Out()):
+  match want:
+    case False{}:
+      Rtsp.start(s, buf, path, ms, cfg, sets, U.Aud.none(), 4)
+    case True{}:
+      Rtsp.ask(s, buf, req, s2 => b2 => r => Rtsp.audio.got(
+        U32.is_eq(C.Resp.code(r), 200), s2, b2, path, ms, cfg, sets, aud))
 
 def Rtsp.setup.got(ok: Bool, +r: C.Resp, s: Socket, buf: List<&2, U32>,
-  path: String, ms: U32, +m: C.Media, uri: String, chal: C.Chal, +u: C.Url,
-  cnonce: String) -> IO(N.Out()):
+  +path: String, ms: U32, +m: C.Media, +uri: String, +chal: C.Chal, +u: C.Url,
+  +cnonce: String, a: C.Media, aurl: String) -> IO(N.Out()):
   match ok:
     case True{}:
       +h265 = String.eq(C.Media.codec(m), "H265")
@@ -216,9 +239,13 @@ def Rtsp.setup.got(ok: Bool, +r: C.Resp, s: Socket, buf: List<&2, U32>,
       +session = C.Rtsp.session(C.Resp.get(r, "session"))
       +codec = C.Media.codec(m)
       +every = U32.to_nat((C.Rtsp.timeout(C.Resp.get(r, "session")) * 500 : U32))
-      Rtsp.start(s, buf, path, ms, until => Cfg{h265, pt, until, uri, session, chal,
-        C.Url.user(u), C.Url.pass(u), cnonce, codec, every},
-        R.Nal.annexb(C.Sdp.sprops(C.Media.fmtp(m))))
+      +aud = U.Aud.of(a)
+      Rtsp.audio(Rtsp.ts(path) && U.Aud.on(aud), s, buf, path, ms,
+        until => Cfg{h265, pt, until, uri, session, chal, C.Url.user(u), C.Url.pass(u),
+          cnonce, codec, every},
+        R.Nal.annexb(C.Sdp.sprops(C.Media.fmtp(m))), aud,
+        C.Rtsp.signed(chal, C.Url.user(u), C.Url.pass(u), "SETUP", aurl, 4, cnonce,
+          session, [C.Hdr{"Transport", "RTP/AVP/TCP;unicast;interleaved=2-3"}]))
     case False{}:
       N.Conn.fail(s, C.Resp.code(r), "SETUP was refused (the server may not do "
         ++ "RTP over the RTSP connection)")
@@ -226,7 +253,7 @@ def Rtsp.setup.got(ok: Bool, +r: C.Resp, s: Socket, buf: List<&2, U32>,
 # SETUP for the video's track, RTP interleaved on channels 0 and 1.
 def Rtsp.setup(problem: String, s: Socket, buf: List<&2, U32>, path: String,
   ms: U32, +m: C.Media, +base: String, +sdp: C.Sdp, +chal: C.Chal, +u: C.Url,
-  +cnonce: String) -> IO(N.Out()):
+  +cnonce: String, +a: C.Media) -> IO(N.Out()):
   match problem:
     case SCon{h, t}:
       N.Conn.fail(s, 0, SCon{h, t})
@@ -235,7 +262,8 @@ def Rtsp.setup(problem: String, s: Socket, buf: List<&2, U32>, path: String,
         C.Rtsp.control(base, C.Media.control(m)), 3, cnonce, "",
         [C.Hdr{"Transport", "RTP/AVP/TCP;unicast;interleaved=0-1"}]),
         s2 => b2 => +r => Rtsp.setup.got(U32.is_eq(C.Resp.code(r), 200), r, s2, b2,
-          path, ms, m, C.Rtsp.control(base, C.Sdp.session(sdp)), chal, u, cnonce))
+          path, ms, m, C.Rtsp.control(base, C.Sdp.session(sdp)), chal, u, cnonce, a,
+          C.Rtsp.control(base, C.Media.control(a))))
 
 # The description is here: its video stream, and the URL its control
 # attributes are relative to (Content-Base, else the request's).
@@ -245,7 +273,8 @@ def Rtsp.described(+r: C.Resp, s: Socket, buf: List<&2, U32>, path: String, ms: 
   +m = C.Sdp.media(sdp, "video")
   +cb = C.Resp.get(r, "content-base")
   Rtsp.setup(C.Sdp.problem(m), s, buf, path, ms, m,
-    Bool.pick(String, String.is_empty(cb), uri, cb), sdp, chal, u, cnonce)
+    Bool.pick(String, String.is_empty(cb), uri, cb), sdp, chal, u, cnonce,
+    C.Sdp.media(sdp, "audio"))
 
 def Rtsp.describe.req(chal: C.Chal, +u: C.Url, +uri: String, cseq: U32,
   cnonce: String) -> String:

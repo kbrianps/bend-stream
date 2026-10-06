@@ -105,6 +105,12 @@ pull "rtsp: H.264 from an RTMP publisher" rtsp://127.0.0.1:18554/open b.h264 h26
 pull "rtsp: H.265" rtsp://127.0.0.1:18554/hevc c.h265 hevc
 pull "rtsp: H.264 into MPEG-TS" rtsp://cam:s3gredo@127.0.0.1:18554/priv o.ts h264
 pull "rtsp: H.265 into MPEG-TS" rtsp://127.0.0.1:18554/hevc p.ts hevc
+pull "rtsp: with AAC into MPEG-TS, the video" rtsp://127.0.0.1:18554/open q.ts h264
+pull "rtsp: with AAC into MPEG-TS, the audio" rtsp://127.0.0.1:18554/open r.ts aac a
+# Sound and picture start together, within a fifth of a second.
+gap=$(ffprobe -v error -show_entries stream=start_time -of csv=p=0 "$T/r.ts" 2>/dev/null \
+  | sort -u | awk 'NR==1{a=$1} END{d=$1-a; if (d<0) d=-d; print (d<0.2) ? "ok" : d}')
+[ "$gap" = "ok" ] && ok "ts: audio and video start together" || bad "ts: streams start $gap s apart"
 # The TS carries each picture's time: ffprobe reads the 25 pictures a
 # second the source makes, and the whole file decodes without a complaint.
 for f in o.ts p.ts; do
