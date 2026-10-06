@@ -27,8 +27,8 @@ ok: H264, 125 frames, 142543 bytes
 - SDP: picks the video stream and its control URL.
 - RTP over the RTSP connection (interleaved TCP).
 - H.264 (RFC 6184: single units, STAP-A, FU-A) and H.265 (RFC 7798: single units, aggregation packets, fragmentation units).
-- Gives whole pictures (access units in Annex B form) and, when the audio is AAC (RFC 3640), its frames, each with its time.
-- The recorder writes them raw (`ffplay out.h264` plays it) or, to a file named `.ts`, as MPEG-TS with the audio and the time of each frame, which is what a recording wants.
+- Gives whole pictures (access units in Annex B form) and the audio's frames, each with its time: AAC (RFC 3640) with ADTS headers, or G.711 samples (PCMA and PCMU, what most cameras send).
+- The recorder writes them raw (`ffplay out.h264` plays it); to a file named `.ts`, as MPEG-TS with the AAC audio and the time of each frame, which is what a recording wants; or the audio alone, to `.aac`, `.alaw` or `.ulaw`.
 
 **RTMP**
 
@@ -54,7 +54,7 @@ r : S.Opened() <- S.Rtsp.open(E.Opts.new("rtsp://user:pass@camera/stream"))
 # next: one frame, and the session to go on with
 r : S.Read() <- S.Rtsp.next(s)
 #   Done{(s, F.Video{pts, key, data})}   a picture: its NAL units in Annex B form
-#   Done{(s, F.Audio{pts, data})}        AAC frames, each after an ADTS header
+#   Done{(s, F.Audio{pts, data})}        AAC frames after ADTS headers, or G.711 samples
 #   Fail{e}                              the session is over, the connection closed
 
 S.Rtsp.close(s)
@@ -64,7 +64,7 @@ S.Rtsp.close(s)
 
 **Options** (`opts.bend`): `E.Opts.new(url)`, then any of `E.Opts.login(o, user, pass)` (instead of the URL's), `E.Opts.wait(o, ms)` (how long the server may stay silent; 10 s), `E.Opts.audio(o, False{})` (video only), `E.Opts.ca(o, "ca.pem")` (the certificate to trust under TLS).
 
-**Frames** (`frame.bend`): `pts` is in 90 kHz ticks since the stream's first frame; `key` says a decoder can start there. `S.Rtsp.about(s)` gives the session back with an `F.Info`: the codec (`"H264"` or `"H265"`), the parameter sets the server announced, whether there is audio.
+**Frames** (`frame.bend`): `pts` is in 90 kHz ticks since the stream's first frame; `key` says a decoder can start there. `S.Rtsp.about(s)` gives the session back with an `F.Info`: the codec (`"H264"` or `"H265"`), the parameter sets the server announced, and the audio's codec (`"AAC"`, `"PCMA"`, `"PCMU"`, or `""`).
 
 **Errors** (`opts.bend`): an `E.Err{why, code, msg}`. `why` is what a program acts on:
 
@@ -129,7 +129,7 @@ Beyond the script, the RTSP client was run against real recorders: an Intelbras 
 
 ## Limits
 
-- RTSP: only RTP over the RTSP connection (no UDP). Audio only as AAC: G.711, which many cameras send, is not read.
+- RTSP: only RTP over the RTSP connection (no UDP). G.711 audio is given as frames and recorded alone, but has no place in a TS.
 - Sound and picture are lined up by their first packets, not by RTCP sender reports.
 - RTMP: playing only, no publishing. A missing login shows as "the server closed the connection".
 - The TS takes the RTP timestamp for both the presentation and the decoding time, which is wrong for a stream with B-frames (cameras rarely make them).

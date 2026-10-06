@@ -35,7 +35,7 @@ def Flv.new() -> Flv:
 # before the first picture when there is audio).
 def Flv.info(st: Flv) -> F.Info:
   Flv{_, _, _, _, chan, sound, _, _} = st
-  F.Info{"H264", Nil{}, sound, 0, chan}
+  F.Info{"H264", Nil{}, Bool.pick(String, sound, "AAC", ""), 0, chan}
 
 def Flv.sets.cut(c: B.Cut, acc: List<&2, U32>,
   k: List<&2, U32> -> List<&2, U32> -> List<&2, U32>) -> List<&2, U32>:

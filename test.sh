@@ -51,10 +51,13 @@ authInternalUsers:
         path: open
       - action: read
         path: hevc
+      - action: read
+        path: g711
 paths:
   open:
   priv:
   hevc:
+  g711:
 Y
 "$MTX" "$T/mtx.yml" > "$T/mtx.log" 2>&1 &
 pids=$!
@@ -71,8 +74,11 @@ ffmpeg $SRC -c:v libx265 -preset ultrafast -tune zerolatency -g 25 -bf 0 \
   -x265-params log-level=error -pix_fmt yuv420p -f rtsp -rtsp_transport tcp \
   rtsp://127.0.0.1:18554/hevc > /dev/null 2>&1 &
 pids="$pids $!"
-# Wait for the three streams to be up (the encoders take a moment).
-for path in open priv hevc; do
+ffmpeg $SRC -f lavfi -i sine=frequency=440:sample_rate=8000 $X264 -c:a pcm_alaw -ar 8000 -ac 1 \
+  -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:18554/g711 > /dev/null 2>&1 &
+pids="$pids $!"
+# Wait for the four streams to be up (the encoders take a moment).
+for path in open priv hevc g711; do
   for i in $(seq 30); do
     grep -q "is publishing to path '$path'" "$T/mtx.log" && break
     sleep 0.5
@@ -115,6 +121,16 @@ for f in o.ts p.ts; do
   errs=$(ffmpeg -v error -i "$T/$f" -f null - 2>&1 | grep -v -c -i "non-existing\|no frame\|missing reference\|Could not find ref\|RPS\|POC")
   [ "$rate" = "25/1" ] && [ "$errs" = "0" ] && ok "ts: $f times and decodes" || bad "ts: $f rate $rate, $errs decode errors"
 done
+pull "rtsp: the audio alone, AAC" rtsp://127.0.0.1:18554/open v.aac aac a
+pull "rtsp: with G.711, the video into MPEG-TS" rtsp://127.0.0.1:18554/g711 w.ts h264
+# G.711 is a byte a sample, 8000 a second: 3 seconds are about 24000 bytes.
+"$T/pull" rtsp://127.0.0.1:18554/g711 "$T/x.alaw" 3 > /dev/null 2>&1
+size=$(stat -c %s "$T/x.alaw" 2>/dev/null || echo 0)
+codec=$(ffprobe -v error -f alaw -ar 8000 -show_entries stream=codec_name -of csv=p=0 "$T/x.alaw" 2>/dev/null)
+[ "$size" -gt 16000 ] && [ "$size" -lt 40000 ] && [ "$codec" = "pcm_alaw" ] \
+  && ok "rtsp: the audio alone, G.711 ($size bytes)" || bad "rtsp: G.711: $size bytes, $codec"
+streams=$(ffprobe -v error -show_entries stream=codec_type -of csv=p=0 "$T/w.ts" 2>/dev/null | grep -c audio)
+[ "$streams" = "0" ] && ok "ts: G.711 is left out of a TS" || bad "ts: $streams audio streams with G.711"
 fails "rtsp: wrong password" rtsp://cam:errada@127.0.0.1:18554/priv "login refused"
 fails "rtsp: no such path" rtsp://127.0.0.1:18554/nada "no such stream|refused"
 fails "rtsp: nothing listening" rtsp://127.0.0.1:18999/x "cannot connect"

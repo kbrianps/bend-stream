@@ -141,3 +141,14 @@ law retry_only_what_may_pass:
     E.Why.again(E.Ended{})]
     == [True{}, True{}, True{}, False{}, False{}, False{}, False{}, False{}, False{},
       False{}] : List<&2, Bool>}
+
+# LAW: G.711 needs no name in a description: payload type 8 is the
+# A-law and 0 the mu-law, at 8000 samples a second; and a stream that is
+# no audio is no G.711, whatever its payload type.
+law g711_by_number:
+  {[U.Aud.codec(U.Aud.of(C.Media{"audio", 8, "", 0, "", ""})),
+    U.Aud.codec(U.Aud.of(C.Media{"audio", 0, "", 0, "", ""})),
+    U.Aud.codec(U.Aud.of(C.Media{"audio", 97, "PCMA", 8000, "", ""})),
+    U.Aud.codec(U.Aud.of(C.Media{"", 0, "", 0, "", ""})),
+    U32.show(U.Aud.rate(U.Aud.of(C.Media{"audio", 8, "", 0, "", ""})))]
+    == ["PCMA", "PCMU", "PCMA", "", "8000"] : List<&2, String>}

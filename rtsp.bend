@@ -185,7 +185,7 @@ def Rtsp.play(s: Socket, buf: List<&2, U32>, +c: Cfg, +next: U32, asm: D.Asm,
         asm, info))
 
 def Rtsp.info(+m: C.Media, +aud: U.Aud) -> F.Info:
-  F.Info{C.Media.codec(m), R.Nal.annexb(C.Sdp.sprops(C.Media.fmtp(m))), U.Aud.on(aud),
+  F.Info{C.Media.codec(m), R.Nal.annexb(C.Sdp.sprops(C.Media.fmtp(m))), U.Aud.codec(aud),
     U.Aud.rate(aud), U.Aud.chans(aud)}
 
 def Rtsp.audio.on(s: Socket, buf: List<&2, U32>, c: Cfg, +m: C.Media, +aud: U.Aud) ->
@@ -203,7 +203,7 @@ def Rtsp.audio.got(ok: Bool, s: Socket, buf: List<&2, U32>, c: Cfg, +m: C.Media,
         Rtsp.info(m, U.Aud.none()))
 
 # The audio's track too, on channels 2 and 3, when it is wanted and it
-# is AAC; a server that refuses it gives the video alone.
+# is AAC or G.711; a server that refuses it gives the video alone.
 def Rtsp.audio(want: Bool, s: Socket, buf: List<&2, U32>, +c: Cfg, +m: C.Media,
   aud: U.Aud, req: String) -> IO(Fin()):
   match want:
