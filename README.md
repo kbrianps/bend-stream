@@ -1,5 +1,7 @@
 # bend-stream
 
+[Português](README.pt-BR.md)
+
 RTSP and RTMP clients written in [Bend 2](https://github.com/bendlang/bend). The protocols are all Bend; one C file, `net.c`, gives the sockets what Base's lack: hosts by name, TLS and reads with a deadline.
 
 It is a library (a session gives frames, see below) and a recorder built on it:
@@ -15,7 +17,7 @@ bend pull.bend -o pull
 The last argument is how many seconds to record (10 when left out). The program prints what it did, or the error:
 
 ```
-ok: H264, 125 frames, 142543 bytes
+ok: H264+PCMA, 125 frames, 142543 bytes
 ```
 
 ## What it does
@@ -148,7 +150,7 @@ Beyond the script, the RTSP client was run against real recorders, into MPEG-TS:
 - Sound and picture are lined up by their first packets, not by RTCP sender reports.
 - RTMP: playing only, no publishing. A missing login shows as "the server closed the connection".
 - The TS takes the RTP timestamp for both the presentation and the decoding time, which is wrong for a stream with B-frames (cameras rarely make them).
-- The FLV keeps the server's timestamps, so it may not start at zero. Of enhanced RTMP only H.265 is read (no AV1, VP9 or multitrack).
+- The FLV of an RTMP stream keeps the server's timestamps, so it may not start at zero. Of enhanced RTMP only H.265 is read (no AV1, VP9 or multitrack).
 - A lost session is not mended by itself: `next` says why it failed, and the program calls `reopen` (the recorder does).
 - Native only: `bend pull.bend` alone runs the JS side, which has no sockets of this kind.
 - Bytes are linked lists in Bend: expect about 280 MB of memory for a 640x360 stream.
