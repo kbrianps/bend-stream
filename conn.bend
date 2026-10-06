@@ -71,19 +71,46 @@ def Conn.send(-T: Type, s: Socket, bs: List<&2, U32>, k: Socket -> IO(Res(T))) -
 def Conn.say(-T: Type, s: Socket, text: String, k: Socket -> IO(Res(T))) -> IO(Res(T)):
   Conn.send(T, s, B.Bytes.of(text), k)
 
-def Conn.shut.sent(m: Sent()) -> IO(Unit):
-  (s, _) = m
-  X.Net.close(s)
+def Conn.shut.end(m: Recv(), go: Socket -> IO(Unit)) -> IO(Unit):
+  (s, r) = m
+  match r:
+    case Done{Some{Con{_, _}}}:
+      go(s)
+    case _:
+      X.Net.close(s)
 
-# A last word to the server, sent or not, and the socket closed.
-def Conn.shut(s: Socket, last: List<&2, U32>) -> IO(Unit):
+# What the server still sends is read and dropped, for at most turns
+# reads, until it is quiet for ms or it closes; then the socket is
+# closed. A server gets to answer the last word and to free the session
+# before the connection goes: some refuse a new session while the old
+# one is still theirs.
+def Conn.shut.drain(turns: Nat, s: Socket, +ms: U32) -> IO(Unit):
+  match turns:
+    case 0n:
+      X.Net.close(s)
+    case 1n+p:
+      do IO<Unit>:
+        m : Recv() <- X.Net.poll(s, 65536, ms)
+        Conn.shut.end(m, s2 => Conn.shut.drain(p, s2, ms))
+
+def Conn.shut.sent(m: Sent(), ms: U32) -> IO(Unit):
+  (s, r) = m
+  match r:
+    case Done{_}:
+      Conn.shut.drain(64n, s, ms)
+    case Fail{_}:
+      X.Net.close(s)
+
+# A last word to the server, then the socket closed once the server
+# has been quiet for ms (or at once, with no last word).
+def Conn.shut(s: Socket, last: List<&2, U32>, ms: U32) -> IO(Unit):
   match last:
     case Nil{}:
       X.Net.close(s)
     case Con{h, t}:
       do IO<Unit>:
         m : Sent() <- X.Net.send(s, h <> t)
-        Conn.shut.sent(m)
+        Conn.shut.sent(m, ms)
 
 def Conn.secured(-T: Type, m: Sent(), k: Socket -> IO(Res(T))) -> IO(Res(T)):
   (s, r) = m

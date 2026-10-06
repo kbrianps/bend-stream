@@ -477,8 +477,8 @@ def Rtsp.about(x: Sess) -> Sess & F.Info:
   Sess{s, buf, asm, c, ka, cseq, queue, +info} = x
   (Sess{s, buf, asm, c, ka, cseq, queue, info}, info)
 
-# End the session: TEARDOWN (its reply is not waited for) and the
-# connection closed.
+# End the session: TEARDOWN, and the connection closed once the server
+# has answered or gone quiet for a fifth of a second.
 def Rtsp.close(x: Sess) -> IO(Unit):
   Sess{s, _, _, c, _, cseq, _, _} = x
-  N.Conn.shut(s, B.Bytes.of(Cfg.request(c, "TEARDOWN", cseq)))
+  N.Conn.shut(s, B.Bytes.of(Cfg.request(c, "TEARDOWN", cseq)), 200)

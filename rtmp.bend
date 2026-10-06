@@ -248,4 +248,4 @@ def Rtmp.next(x: Sess) -> IO(Read()):
 # End the session: the connection closed.
 def Rtmp.close(x: Sess) -> IO(Unit):
   Sess{s, _, _, _, _, _} = x
-  N.Conn.shut(s, Nil{})
+  N.Conn.shut(s, Nil{}, 0)
