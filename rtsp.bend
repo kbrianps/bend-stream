@@ -9,7 +9,8 @@
 #   C: TEARDOWN url, Session
 #
 # The video's NAL units are rebuilt from the RTP packets and written in
-# Annex B form, the parameter sets the description announces first. This
+# Annex B form, the parameter sets the description announces first; or,
+# to a file named .ts, as MPEG-TS with each picture's time (mux.bend). This
 # file is the IO; what to say and what a reply means is in rtsp_core.bend
 # and rtp.bend, which are pure.
 #
@@ -21,6 +22,7 @@ import ./bytes.bend as B
 import ./rtsp_core.bend as C
 import ./rtp.bend as R
 import ./conn.bend as N
+import ./mux.bend as M
 
 # What the loop needs to know: H.265 or H.264, the payload type, when to
 # stop (IO.now's clock, ms), and how to sign a request.
@@ -74,46 +76,31 @@ def Rtsp.ask(s: Socket, +buf: List<&2, U32>, req: String,
 # The stream
 # ----------
 
-def Rtsp.units.pt(mine: Bool, h265: Bool, payload: List<&2, U32>, st: R.Dep) -> R.Out:
-  match mine h265:
-    case False{} _:
-      R.Out{Nil{}, st}
-    case True{} True{}:
-      R.H265.push(st, payload)
-    case True{} False{}:
-      R.H264.push(st, payload)
-
-# The units a channel's packet completes: only channel 0's RTP packets
+# What a channel's packet gives the file: only channel 0's RTP packets
 # of the video's payload type count.
-def Rtsp.units.of(rtp: R.Rtp, +h265: Bool, +pt: U32, st: R.Dep) -> R.Out:
-  match rtp:
-    case R.NoRtp{}:
-      R.Out{Nil{}, st}
-    case R.Rtp{_, p, _, _, _, payload}:
-      Rtsp.units.pt(U32.is_eq(p, pt), h265, payload, st)
-
-def Rtsp.units(video: Bool, data: List<&2, U32>, h265: Bool, pt: U32, st: R.Dep) ->
-  R.Out:
+def Rtsp.put(video: Bool, data: List<&2, U32>, pt: U32, st: M.Mux) -> M.Put:
   match video:
     case True{}:
-      Rtsp.units.of(R.Rtp.of(data), h265, pt, st)
+      M.Mux.packet(R.Rtp.of(data), pt, st)
     case False{}:
-      R.Out{Nil{}, st}
+      M.Put{Nil{}, 0, st}
 
-def Cfg.units(c: Cfg, chan: U32, data: List<&2, U32>, st: R.Dep) -> R.Out:
-  Cfg{h265, pt, _, _, _, _, _, _, _, _, _} = c
-  Rtsp.units(U32.is_zero(chan), data, h265, pt, st)
+def Cfg.put(c: Cfg, chan: U32, data: List<&2, U32>, st: M.Mux) -> M.Put:
+  Cfg{_, pt, _, _, _, _, _, _, _, _, _} = c
+  Rtsp.put(U32.is_zero(chan), data, pt, st)
+
+def Cfg.h265(c: Cfg) -> Bool:
+  Cfg{x, _, _, _, _, _, _, _, _, _, _} = c
+  x
 
 # TEARDOWN (its reply is not waited for), then both ends closed.
 def Rtsp.finish(s: Socket, f: File, c: Cfg, cseq: U32, r: N.Out()) -> IO(N.Out()):
   N.Conn.bye(s, Cfg.request(c, "TEARDOWN", cseq), f, r)
 
-def Rtsp.frame(o: R.Out, s: Socket, f: File, p: N.Pulled,
-  k: Socket -> File -> R.Dep -> N.Pulled -> IO(N.Out())) -> IO(N.Out()):
-  R.Out{+nals, st} = o
-  +bs = R.Nal.annexb(nals)
-  N.Conn.save(bs, s, f, s2 => f2 => k(s2, f2, st,
-    N.Pulled.add(p, U32.from_nat(List.length(&2, List<&2, U32>, nals)), B.Bytes.len(bs))))
+def Rtsp.frame(o: M.Put, s: Socket, f: File, p: N.Pulled,
+  k: Socket -> File -> M.Mux -> N.Pulled -> IO(N.Out())) -> IO(N.Out()):
+  M.Put{+bs, units, st} = o
+  N.Conn.save(bs, s, f, s2 => f2 => k(s2, f2, st, N.Pulled.add(p, units, B.Bytes.len(bs))))
 
 # With nothing left in the buffer: stop when the time is up; else, a
 # keep-alive when one is due (at half the session's timeout), and more
@@ -149,12 +136,12 @@ def Rtsp.turn(+now: Nat, buf: List<&2, U32>, s: Socket, f: File, +c: Cfg, +ka: N
 # keep-alive) dropped, and more bytes when the buffer has no whole
 # message. ka: when the next keep-alive is due.
 def Rtsp.loop(fuel: Nat, m: C.Msg, buf: List<&2, U32>, s: Socket, f: File,
-  st: R.Dep, +c: Cfg, +ka: Nat, +cseq: U32, p: N.Pulled) -> IO(N.Out()):
+  st: M.Mux, +c: Cfg, +ka: Nat, +cseq: U32, p: N.Pulled) -> IO(N.Out()):
   match fuel m:
     case 0n _:
       Rtsp.finish(s, f, c, cseq, Done{p})
     case 1n+q C.Frame{chan, data, +rest}:
-      Rtsp.frame(Cfg.units(c, chan, data, st), s, f, p, s2 => f2 => st2 => p2 =>
+      Rtsp.frame(Cfg.put(c, chan, data, st), s, f, p, s2 => f2 => st2 => p2 =>
         N.Conn.due(Cfg.until(c), s2, f2, p2,
           s3 => f3 => p3 => Rtsp.finish(s3, f3, c, cseq, Done{p3}),
           s3 => f3 => p3 => Rtsp.loop(q, C.Rtsp.demux(rest), rest, s3, f3, st2, c, ka,
@@ -173,42 +160,51 @@ def Rtsp.loop(fuel: Nat, m: C.Msg, buf: List<&2, U32>, s: Socket, f: File,
 # ----------
 
 def Rtsp.play.got(ok: Bool, r: C.Resp, s: Socket, +buf: List<&2, U32>, f: File,
-  +c: Cfg, +now: Nat, head: U32) -> IO(N.Out()):
+  +c: Cfg, +now: Nat, head: U32, mux: M.Mux) -> IO(N.Out()):
   match ok:
     case True{}:
-      Rtsp.loop(4000000000n, C.Rtsp.demux(buf), buf, s, f, R.Dep.new(), c,
+      Rtsp.loop(4000000000n, C.Rtsp.demux(buf), buf, s, f, mux, c,
         Nat.add(now, Cfg.every(c)), 5, N.Pulled{0, 0, head, Cfg.codec(c)})
     case False{}:
       do IO<N.Out()>:
         File.close(f)
         N.Conn.fail(s, C.Resp.code(r), "PLAY was refused")
 
-# PLAY, once the file is open and the announced parameter sets are in it.
+# PLAY, once the file is open.
 def Rtsp.play(s: Socket, buf: List<&2, U32>, f: File, +c: Cfg, +now: Nat,
-  head: U32) -> IO(N.Out()):
+  head: U32, mux: M.Mux) -> IO(N.Out()):
   Rtsp.ask(s, buf, Cfg.request(c, "PLAY", 4), s2 => b2 => +r =>
-    Rtsp.play.got(U32.is_eq(C.Resp.code(r), 200), r, s2, b2, f, c, now, head))
+    Rtsp.play.got(U32.is_eq(C.Resp.code(r), 200), r, s2, b2, f, c, now, head, mux))
 
 def Rtsp.opened(r: Result<&1, &1, U32 & String, File>, s: Socket,
-  buf: List<&2, U32>, +c: Cfg, +sets: List<&2, U32>, now: Nat) -> IO(N.Out()):
+  buf: List<&2, U32>, +c: Cfg, +sets: List<&2, U32>, now: Nat, +ts: Bool) ->
+  IO(N.Out()):
   match r:
     case Fail{e}:
       (code, msg) = e
       N.Conn.fail(s, code, "cannot write the file: " ++ msg)
     case Done{f}:
-      N.Conn.save(sets, s, f, s2 => f2 => Rtsp.play(s2, buf, f2, c, now, B.Bytes.len(sets)))
+      # The announced parameter sets open a raw file; in a TS they go
+      # in front of the first picture.
+      +first = Bool.pick(List<&2, U32>, ts, Nil{}, sets)
+      N.Conn.save(first, s, f, s2 => f2 => Rtsp.play(s2, buf, f2, c, now,
+        B.Bytes.len(first), M.Mux.new(ts, Cfg.h265(c),
+          Bool.pick(List<&2, U32>, ts, sets, Nil{}))))
 
 def Rtsp.start.at(+now: Nat, f: Result<&1, &1, U32 & String, File>, s: Socket,
-  buf: List<&2, U32>, ms: U32, cfg: Nat -> Cfg, sets: List<&2, U32>) -> IO(N.Out()):
-  Rtsp.opened(f, s, buf, cfg(Nat.add(now, U32.to_nat(ms))), sets, now)
+  buf: List<&2, U32>, ms: U32, cfg: Nat -> Cfg, sets: List<&2, U32>, ts: Bool) ->
+  IO(N.Out()):
+  Rtsp.opened(f, s, buf, cfg(Nat.add(now, U32.to_nat(ms))), sets, now, ts)
 
-# The session is set up: open the file, note the time, play.
-def Rtsp.start(s: Socket, buf: List<&2, U32>, path: String, +ms: U32,
+# The session is set up: open the file (a name in .ts asks for MPEG-TS),
+# note the time, play.
+def Rtsp.start(s: Socket, buf: List<&2, U32>, +path: String, +ms: U32,
   cfg: Nat -> Cfg, sets: List<&2, U32>) -> IO(N.Out()):
   do IO<N.Out()>:
     now : Nat <- IO.now()
     f : Result<&1, &1, U32 & String, File> <- File.open(path, "w")
-    Rtsp.start.at(now, f, s, buf, ms, cfg, sets)
+    Rtsp.start.at(now, f, s, buf, ms, cfg, sets,
+      String.ends_with(String.to_lower(path), ".ts"))
 
 def Rtsp.setup.got(ok: Bool, +r: C.Resp, s: Socket, buf: List<&2, U32>,
   path: String, ms: U32, +m: C.Media, uri: String, chal: C.Chal, +u: C.Url,

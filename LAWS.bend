@@ -9,10 +9,18 @@ import ./amf.bend as A
 import ./rtsp_core.bend as C
 import ./rtmp_core.bend as K
 import ./rtp.bend as R
+import ./ts.bend as S
 
 def Laws.nals(o: R.Out) -> List<&2, List<&2, U32>>:
   R.Out{n, _} = o
   n
+
+def Laws.zeros(n: Nat, acc: List<&2, U32>) -> List<&2, U32>:
+  match n:
+    case 0n:
+      acc
+    case 1n+p:
+      Laws.zeros(p, 0 <> acc)
 
 def Laws.state(o: R.Out) -> R.Dep:
   R.Out{_, s} = o
@@ -79,3 +87,27 @@ law where_parts:
   {[K.Where.of("/live/cam?k=1"), K.Where.of("/a/b/c"), K.Where.of("/priv?user=x")]
     == [K.Where{"live", "cam?k=1"}, K.Where{"a/b", "c"}, K.Where{"priv?user=x", ""}]
     : List<&2, K.Where>}
+
+# MPEG-TS
+# -------
+
+# LAW: the PAT is the packet every muxer writes for one program on PID
+# 4096, its CRC included, and a packet is 188 bytes.
+law ts_pat:
+  {[B.Bytes.take(21n, S.Ts.pat(0)), [B.Bytes.len(S.Ts.pat(0)),
+    B.Bytes.len(S.Ts.pmt(0, 27, 15))]]
+    == [[71, 64, 0, 16, 0, 0, 176, 13, 0, 1, 193, 0, 0, 0, 1, 240, 0, 42, 177, 4, 178],
+      [188, 188]] : List<&2, List<&2, U32>>}
+
+# LAW: a PES packet of any size comes out in whole packets: 100 bytes
+# with the clock in one, 184 bytes without it in one, 185 in two.
+law ts_whole_packets:
+  {[B.Bytes.len(S.Ts.pes(256, 0, S.Ts.pcr(90000), Laws.zeros(100n, Nil{}))),
+    B.Bytes.len(S.Ts.pes(257, 0, Nil{}, Laws.zeros(184n, Nil{}))),
+    B.Bytes.len(S.Ts.pes(257, 0, Nil{}, Laws.zeros(185n, Nil{}))),
+    S.Ts.count(100, True{}), S.Ts.count(184, False{}), S.Ts.count(185, False{})]
+    == [188, 188, 376, 1, 1, 2] : List<&2, U32>}
+
+# LAW: a time is the 5 bytes of a PTS (1 second: 90000 ticks).
+law ts_pts:
+  {S.Pes.pts(90000, Nil{}) == [33, 0, 5, 191, 33] : List<&2, U32>}

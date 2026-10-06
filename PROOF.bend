@@ -7,6 +7,7 @@ import ./amf.bend as A
 import ./rtsp_core.bend as C
 import ./rtmp_core.bend as K
 import ./rtp.bend as R
+import ./ts.bend as S
 import ./LAWS.bend as Laws
 
 # One cleaned char on a clean rest: a newline is dropped, any other
@@ -53,4 +54,13 @@ def Laws.flv_tag():
   {==}
 
 def Laws.where_parts():
+  {==}
+
+def Laws.ts_pat():
+  {==}
+
+def Laws.ts_whole_packets():
+  {==}
+
+def Laws.ts_pts():
   {==}

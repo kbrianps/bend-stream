@@ -27,7 +27,7 @@ ok: H264, 144 packets, 520 units, 142543 bytes
 - SDP: picks the video stream and its control URL.
 - RTP over the RTSP connection (interleaved TCP).
 - H.264 (RFC 6184: single units, STAP-A, FU-A) and H.265 (RFC 7798: single units, aggregation packets, fragmentation units).
-- Writes the raw stream in Annex B form, the parameter sets of the SDP first. `ffplay out.h264` plays it.
+- Writes the raw stream in Annex B form, the parameter sets of the SDP first (`ffplay out.h264` plays it); or, to a file named `.ts`, MPEG-TS with the time of each picture, which is what a recording wants.
 
 **RTMP**
 
@@ -56,6 +56,7 @@ The result is `Done{Pulled{packets, units, bytes, kind}}` or `Fail{(code, messag
 |---|---|
 | `rtsp_core.bend` | Pure: URLs, requests, replies and interleaved frames, authentication, SDP |
 | `rtp.bend` | Pure: RTP packets, H.264 and H.265 units, Annex B |
+| `mux.bend`, `ts.bend` | Pure: access units and MPEG-TS (PAT, PMT, PES, the clock) |
 | `rtmp_core.bend` | Pure: handshake, chunks, commands, what a message means, FLV |
 | `amf.bend` | Pure: AMF0 |
 | `bytes.bend`, `text.bend`, `b64.bend`, `md5.bend` | Pure helpers |
@@ -72,7 +73,8 @@ The result is `Done{Pulled{packets, units, bytes, kind}}` or `Fail{(code, messag
 - the Digest answer is the example of RFC 2617 3.5, and Basic the one of RFC 7617;
 - an H.264 unit split in FU-A fragments comes out whole, and a fragment whose start was lost gives nothing;
 - AMF0 numbers are the right IEEE 754 doubles, and a field of a status object is found after a round trip;
-- an FLV tag has the bytes the format says.
+- an FLV tag has the bytes the format says;
+- the PAT is byte for byte the one every muxer writes, CRC included, and a PES packet of any size comes out in whole 188-byte packets.
 
 ## Tests
 
@@ -88,6 +90,7 @@ Beyond the script, the RTSP client was run against real recorders: an Intelbras 
 
 - RTSP: only RTP over the RTSP connection (no UDP), and only the video stream.
 - RTMP: playing only, no publishing. A missing login shows as "the server closed the connection".
+- The TS takes the RTP timestamp for both the presentation and the decoding time, which is wrong for a stream with B-frames (cameras rarely make them).
 - The FLV keeps the server's timestamps, so it may not start at zero.
 - A server silent for 10 seconds ends the pull; there is no reconnection.
 - Native only: `bend pull.bend` alone runs the JS side, which has no sockets of this kind.

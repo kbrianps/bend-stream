@@ -71,7 +71,14 @@ ffmpeg $SRC -c:v libx265 -preset ultrafast -tune zerolatency -g 25 -bf 0 \
   -x265-params log-level=error -pix_fmt yuv420p -f rtsp -rtsp_transport tcp \
   rtsp://127.0.0.1:18554/hevc > /dev/null 2>&1 &
 pids="$pids $!"
-sleep 3
+# Wait for the three streams to be up (the encoders take a moment).
+for path in open priv hevc; do
+  for i in $(seq 30); do
+    grep -q "is publishing to path '$path'" "$T/mtx.log" && break
+    sleep 0.5
+  done
+done
+sleep 1
 
 # pull NAME URL FILE CODEC: 3 seconds recorded, and ffprobe finds frames
 # of that codec in the file.
@@ -96,6 +103,15 @@ fails() {
 pull "rtsp: H.264 with a login" rtsp://cam:s3gredo@127.0.0.1:18554/priv a.h264 h264
 pull "rtsp: H.264 from an RTMP publisher" rtsp://127.0.0.1:18554/open b.h264 h264
 pull "rtsp: H.265" rtsp://127.0.0.1:18554/hevc c.h265 hevc
+pull "rtsp: H.264 into MPEG-TS" rtsp://cam:s3gredo@127.0.0.1:18554/priv o.ts h264
+pull "rtsp: H.265 into MPEG-TS" rtsp://127.0.0.1:18554/hevc p.ts hevc
+# The TS carries each picture's time: ffprobe reads the 25 pictures a
+# second the source makes, and the whole file decodes without a complaint.
+for f in o.ts p.ts; do
+  rate=$(ffprobe -v error -select_streams v -show_entries stream=r_frame_rate -of csv=p=0 "$T/$f" 2>/dev/null | head -1)
+  errs=$(ffmpeg -v error -i "$T/$f" -f null - 2>&1 | grep -v -c -i "non-existing\|no frame\|missing reference\|Could not find ref\|RPS\|POC")
+  [ "$rate" = "25/1" ] && [ "$errs" = "0" ] && ok "ts: $f times and decodes" || bad "ts: $f rate $rate, $errs decode errors"
+done
 fails "rtsp: wrong password" rtsp://cam:errada@127.0.0.1:18554/priv "wrong user or password"
 fails "rtsp: no such path" rtsp://127.0.0.1:18554/nada "DESCRIBE was refused"
 fails "rtsp: nothing listening" rtsp://127.0.0.1:18999/x "connect"
