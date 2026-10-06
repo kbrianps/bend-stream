@@ -10,6 +10,21 @@ type Frame is Data:
   Video{pts: U32, key: Bool, data: List<&2, U32>}
   Audio{pts: U32, data: List<&2, U32>}
 
+def Frame.pts(f: Frame) -> U32:
+  match f:
+    case Video{pts, _, _}:
+      pts
+    case Audio{pts, _}:
+      pts
+
+# The frame d ticks later: for a stream that goes on after another.
+def Frame.later(f: Frame, d: U32) -> Frame:
+  match f:
+    case Video{pts, key, data}:
+      Video{U32.add(pts, d), key, data}
+    case Audio{pts, data}:
+      Audio{U32.add(pts, d), data}
+
 # A stream's description: the video's codec ("H264" or "H265") and its
 # parameter sets in Annex B form, as the server announced them (they
 # may also come in the stream); the audio's codec ("AAC", "PCMA" or

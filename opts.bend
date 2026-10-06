@@ -110,6 +110,24 @@ def Why.again(w: Why) -> Bool:
     case _:
       False{}
 
+# Whether no amount of waiting will help: the login, the certificate or
+# the URL is wrong. Anything else may pass once a stream that was
+# flowing comes back (a server that restarts has no stream for a while).
+def Why.lasting(w: Why) -> Bool:
+  match w:
+    case NoLogin{}:
+      True{}
+    case Unsafe{}:
+      True{}
+    case BadUrl{}:
+      True{}
+    case _:
+      False{}
+
+def Err.lasting(e: Err) -> Bool:
+  Err{why, _, _} = e
+  Why.lasting(why)
+
 def Err.again(e: Err) -> Bool:
   Err{why, _, _} = e
   Why.again(why)

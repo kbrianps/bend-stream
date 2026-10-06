@@ -78,3 +78,6 @@ def Laws.retry_only_what_may_pass():
 
 def Laws.g711_by_number():
   {==}
+
+def Laws.give_up_only_on_what_lasts():
+  {==}

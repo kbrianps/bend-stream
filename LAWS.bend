@@ -152,3 +152,13 @@ law g711_by_number:
     U.Aud.codec(U.Aud.of(C.Media{"", 0, "", 0, "", ""})),
     U32.show(U.Aud.rate(U.Aud.of(C.Media{"audio", 8, "", 0, "", ""})))]
     == ["PCMA", "PCMU", "PCMA", "", "8000"] : List<&2, String>}
+
+# LAW: a lost stream is given up for good only when waiting cannot help:
+# the login, the certificate or the URL is wrong.
+law give_up_only_on_what_lasts:
+  {[E.Why.lasting(E.NoLogin{}), E.Why.lasting(E.Unsafe{}), E.Why.lasting(E.BadUrl{}),
+    E.Why.lasting(E.NoRoute{}), E.Why.lasting(E.Silent{}), E.Why.lasting(E.Hangup{}),
+    E.Why.lasting(E.NoStream{}), E.Why.lasting(E.Refused{}), E.Why.lasting(E.Garbled{}),
+    E.Why.lasting(E.Ended{})]
+    == [True{}, True{}, True{}, False{}, False{}, False{}, False{}, False{}, False{},
+      False{}] : List<&2, Bool>}

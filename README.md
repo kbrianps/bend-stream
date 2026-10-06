@@ -83,6 +83,8 @@ S.Rtsp.close(s)
 
 `E.Err.show(e)` puts one in a line, and `E.Err.again(e)` says whether opening again may work (the first three).
 
+**Reconnecting**: `S.Rtsp.reopen(opts, until)` (and `M.Rtmp.reopen`) opens a session that was lost: it waits half a second, tries, doubles the wait up to 15 s after each failure, and ends when the session opens, when an error says it never will (`E.Err.lasting(e)`: the login, the certificate or the URL), or when the clock reaches `until`. The recorder uses it: a stream that drops goes on in the same file, its times set after the last frame written, and the result says `reconnected 2 times`.
+
 **Recording** (`rec.bend`): `W.Rec.for(path, info)` makes a recorder for the form the file's name asks for (`.ts`, or raw), and `W.Rec.put(rec, frame)` gives the bytes to write and the recorder to go on with.
 
 **RTMP** (`rtmp.bend`) is the same three calls, `M.Rtmp.open`, `M.Rtmp.next`, `M.Rtmp.close`, and gives tags (`K.Tag{typ, ts, data}`): written after `K.Flv.header()`, each as `K.Flv.of(tag)`, they are an FLV file. `V.Flv.frames(state, tag)` (`flv.bend`) takes the frame out of a tag, the same `F.Frame` an RTSP session gives, so an RTMP stream records to `.ts` too.
@@ -134,7 +136,7 @@ Beyond the script, the RTSP client was run against real recorders: an Intelbras 
 - RTMP: playing only, no publishing. A missing login shows as "the server closed the connection".
 - The TS takes the RTP timestamp for both the presentation and the decoding time, which is wrong for a stream with B-frames (cameras rarely make them).
 - The FLV keeps the server's timestamps, so it may not start at zero. Frames out of RTMP are H.264 and AAC only (no enhanced RTMP).
-- There is no reconnection: a session that fails says why, and the program opens another.
+- A lost session is not mended by itself: `next` says why it failed, and the program calls `reopen` (the recorder does).
 - Native only: `bend pull.bend` alone runs the JS side, which has no sockets of this kind.
 - Bytes are linked lists in Bend: expect about 280 MB of memory for a 640x360 stream.
 

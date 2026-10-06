@@ -25,20 +25,48 @@ import ./rtmp.bend as M
 import ./rtmp_core.bend as K
 import ./flv.bend as V
 
-# What was written: frames (or tags) and bytes.
+# What was written: frames (or tags) and bytes; the last frame's time
+# and what is added to a frame's time (a stream that comes back starts
+# its times over); how many times the stream was lost and found; and
+# whether the next tag is the first after one of those (RTMP, whose
+# times start anywhere).
 type Stat is Data:
-  Stat{frames: U32, bytes: U32}
+  Stat{frames: U32, bytes: U32, last: U32, off: U32, lost: U32, fresh: Bool}
 
 def Stat.add(st: Stat, bytes: U32) -> Stat:
-  Stat{n, b} = st
-  Stat{U32.add(n, 1), U32.add(b, bytes)}
+  Stat{n, b, last, off, lost, fresh} = st
+  Stat{U32.add(n, 1), U32.add(b, bytes), last, off, lost, fresh}
+
+# The frame at its place in the file, and its time noted.
+def Stat.place(st: Stat, f: F.Frame) -> Stat & F.Frame:
+  Stat{n, b, last, +off, lost, fresh} = st
+  +g = F.Frame.later(f, off)
+  (Stat{n, b, U32.max(last, F.Frame.pts(g)), off, lost, fresh}, g)
+
+# The tag at its place in the file: the first after the stream came
+# back goes a tenth of a second after the last one written, and the
+# rest keep their distance from it.
+def Stat.tag(st: Stat, t: K.Tag) -> Stat & K.Tag:
+  Stat{n, b, +last, off, lost, fresh} = st
+  K.Tag{typ, +ts, data} = t
+  +d = Bool.pick(U32, fresh, U32.sub(U32.add(last, 100), ts), off)
+  (Stat{n, b, U32.max(last, U32.add(ts, d)), d, lost, False{}},
+    K.Tag{typ, U32.add(ts, d), data})
+
+# The stream was lost and found: what comes goes a tenth of a second
+# after the last frame written.
+def Stat.found(st: Stat) -> Stat:
+  Stat{n, b, +last, _, lost, _} = st
+  Stat{n, b, last, U32.add(last, 9000), U32.add(lost, 1), True{}}
 
 def Stat.show(st: Stat, kind: String) -> String:
-  Stat{n, b} = st
+  Stat{n, b, _, _, +lost, _} = st
   "ok: " ++ kind ++ ", " ++ U32.show(n) ++ " frames, " ++ U32.show(b) ++ " bytes"
+    ++ Bool.pick(String, U32.is_zero(lost), "", ", reconnected " ++ U32.show(lost)
+      ++ Bool.pick(String, U32.is_eq(lost, 1), " time", " times"))
 
 def Pull.error(e: E.Err, st: Stat) -> String:
-  Stat{+n, _} = st
+  Stat{+n, _, _, _, _, _} = st
   "error: " ++ E.Err.show(e) ++ Bool.pick(String, U32.is_zero(n), "",
     " (after " ++ U32.show(n) ++ " frames)")
 
@@ -96,31 +124,66 @@ def Pull.rtsp.put(w: W.Wrote, s: S.Sess, f: File, until: Nat, st: Stat, kind: St
   Pull.write(S.Sess, bytes, s, f, until, st, kind, S.Rtsp.close,
     s2 => f2 => st2 => again(s2, f2, rec, st2))
 
-def Pull.rtsp.got(r: S.Read(), f: File, rec: W.Rec, until: Nat, st: Stat, kind: String,
+def Pull.rtsp.placed(sf: Stat & F.Frame, rec: W.Rec, s: S.Sess, f: File, until: Nat,
+  kind: String, again: S.Sess -> File -> W.Rec -> Stat -> IO(String)) -> IO(String):
+  (st, frame) = sf
+  Pull.rtsp.put(W.Rec.put(rec, frame), s, f, until, st, kind, again)
+
+# The session is open again, or it will not be: what was recorded is
+# kept either way, and the file says so.
+def Pull.rtsp.found(r: S.Opened(), f: File, rec: W.Rec, st: Stat, +kind: String, +e: E.Err,
   again: S.Sess -> File -> W.Rec -> Stat -> IO(String)) -> IO(String):
   match r:
-    case Fail{e}:
+    case Done{s}:
+      again(s, f, rec, Stat.found(st))
+    case Fail{_}:
+      do IO<String>:
+        File.close(f)
+        IO.pure(String, Stat.show(st, kind) ++ "; then lost: " ++ E.Err.show(e))
+
+# The stream was lost. If it had been flowing and the error is not one
+# that lasts, open it again and go on in the same file.
+def Pull.rtsp.lost(retry: Bool, +e: E.Err, f: File, rec: W.Rec, +until: Nat, st: Stat,
+  kind: String, o: E.Opts, again: S.Sess -> File -> W.Rec -> Stat -> IO(String)) ->
+  IO(String):
+  match retry:
+    case False{}:
       do IO<String>:
         File.close(f)
         IO.pure(String, Pull.error(e, st))
+    case True{}:
+      do IO<String>:
+        r : S.Opened() <- S.Rtsp.reopen(o, until)
+        Pull.rtsp.found(r, f, rec, st, kind, e, again)
+
+def Stat.any(st: Stat) -> Bool:
+  Stat{n, _, _, _, _, _} = st
+  U32.is_ne(n, 0)
+
+def Pull.rtsp.got(r: S.Read(), f: File, rec: W.Rec, until: Nat, +st: Stat, kind: String,
+  o: E.Opts, again: S.Sess -> File -> W.Rec -> Stat -> IO(String)) -> IO(String):
+  match r:
+    case Fail{+e}:
+      Pull.rtsp.lost(Stat.any(st) && Bool.not(E.Err.lasting(e)), e, f, rec, until, st,
+        kind, o, again)
     case Done{sf}:
       (s, frame) = sf
-      Pull.rtsp.put(W.Rec.put(rec, frame), s, f, until, st, kind, again)
+      Pull.rtsp.placed(Stat.place(st, frame), rec, s, f, until, kind, again)
 
 # Frame after frame into the file, until the time is up.
 def Pull.rtsp.loop(fuel: Nat, s: S.Sess, f: File, rec: W.Rec, +until: Nat, st: Stat,
-  +kind: String) -> IO(String):
+  +kind: String, +o: E.Opts) -> IO(String):
   match fuel:
     case 0n:
       Pull.end(S.Sess, s, f, S.Rtsp.close, Stat.show(st, kind))
     case 1n+p:
       do IO<String>:
         r : S.Read() <- S.Rtsp.next(s)
-        Pull.rtsp.got(r, f, rec, until, st, kind, s2 => f2 => rec2 => st2 =>
-          Pull.rtsp.loop(p, s2, f2, rec2, until, st2, kind))
+        Pull.rtsp.got(r, f, rec, until, st, kind, o, s2 => f2 => rec2 => st2 =>
+          Pull.rtsp.loop(p, s2, f2, rec2, until, st2, kind, o))
 
 def Pull.rtsp.file(r: Result<&1, &1, U32 & String, File>, s: S.Sess, rec: W.Rec,
-  until: Nat, kind: String) -> IO(String):
+  until: Nat, kind: String, o: E.Opts) -> IO(String):
   match r:
     case Fail{e}:
       (_, msg) = e
@@ -128,27 +191,27 @@ def Pull.rtsp.file(r: Result<&1, &1, U32 & String, File>, s: S.Sess, rec: W.Rec,
         S.Rtsp.close(s)
         IO.pure(String, "error: cannot write the file: " ++ msg)
     case Done{f}:
-      Pull.rtsp.loop(4000000000n, s, f, rec, until, Stat{0, 0}, kind)
+      Pull.rtsp.loop(4000000000n, s, f, rec, until, Stat{0, 0, 0, 0, 0, False{}}, kind, o)
 
-def Pull.rtsp.at(sa: S.Sess & F.Info, +out: String, ms: U32) -> IO(String):
+def Pull.rtsp.at(sa: S.Sess & F.Info, +out: String, ms: U32, o: E.Opts) -> IO(String):
   (s, +info) = sa
   do IO<String>:
     now : Nat <- IO.now()
     f : Result<&1, &1, U32 & String, File> <- File.open(out, "w")
     Pull.rtsp.file(f, s, W.Rec.for(out, info), Nat.add(now, U32.to_nat(ms)),
-      F.Info.codec(info))
+      F.Info.codec(info), o)
 
-def Pull.rtsp.opened(r: S.Opened(), out: String, ms: U32) -> IO(String):
+def Pull.rtsp.opened(r: S.Opened(), out: String, ms: U32, o: E.Opts) -> IO(String):
   match r:
     case Fail{e}:
-      IO.pure(String, Pull.error(e, Stat{0, 0}))
+      IO.pure(String, Pull.error(e, Stat{0, 0, 0, 0, 0, False{}}))
     case Done{s}:
-      Pull.rtsp.at(S.Rtsp.about(s), out, ms)
+      Pull.rtsp.at(S.Rtsp.about(s), out, ms, o)
 
-def Pull.rtsp(o: E.Opts, out: String, ms: U32) -> IO(String):
+def Pull.rtsp(+o: E.Opts, out: String, ms: U32) -> IO(String):
   do IO<String>:
     r : S.Opened() <- S.Rtsp.open(o)
-    Pull.rtsp.opened(r, out, ms)
+    Pull.rtsp.opened(r, out, ms, o)
 
 # RTMP
 # ----
@@ -199,43 +262,60 @@ def Pull.rtmp.put(u: Sunk, s: M.Sess, f: File, until: Nat, st: Stat,
   Pull.write(M.Sess, bytes, s, f, until, st, "RTMP", M.Rtmp.close,
     s2 => f2 => st2 => again(s2, f2, k, st2))
 
-# The stream's end is no error when something was recorded.
-def Pull.rtmp.over(ended: Bool, e: E.Err, st: Stat) -> String:
-  match ended:
-    case True{}:
-      Stat.show(st, "RTMP")
-    case False{}:
-      Pull.error(e, st)
+def Pull.rtmp.placed(sf: Stat & K.Tag, k: Sink, s: M.Sess, f: File, until: Nat,
+  again: M.Sess -> File -> Sink -> Stat -> IO(String)) -> IO(String):
+  (st, tag) = sf
+  Pull.rtmp.put(Sink.put(k, tag), s, f, until, st, again)
 
-def Pull.rtmp.failed(+e: E.Err, f: File, st: Stat) -> IO(String):
-  E.Err{why, _, _} = e
-  do IO<String>:
-    File.close(f)
-    IO.pure(String, Pull.rtmp.over(E.Why.ended(why), e, st))
-
-def Pull.rtmp.got(r: M.Read(), f: File, k: Sink, until: Nat, st: Stat,
+def Pull.rtmp.found(r: M.Opened(), f: File, k: Sink, st: Stat, +e: E.Err,
   again: M.Sess -> File -> Sink -> Stat -> IO(String)) -> IO(String):
   match r:
-    case Fail{e}:
-      Pull.rtmp.failed(e, f, st)
+    case Done{s}:
+      again(s, f, k, Stat.found(st))
+    case Fail{_}:
+      do IO<String>:
+        File.close(f)
+        IO.pure(String, Stat.show(st, "RTMP") ++ "; then lost: " ++ E.Err.show(e))
+
+# The stream was lost (or its publisher stopped). If it had been flowing
+# and the error is not one that lasts, open it again and go on in the
+# same file.
+def Pull.rtmp.lost(retry: Bool, +e: E.Err, f: File, k: Sink, +until: Nat, st: Stat,
+  o: E.Opts, again: M.Sess -> File -> Sink -> Stat -> IO(String)) -> IO(String):
+  match retry:
+    case False{}:
+      do IO<String>:
+        File.close(f)
+        IO.pure(String, Pull.error(e, st))
+    case True{}:
+      do IO<String>:
+        r : M.Opened() <- M.Rtmp.reopen(o, until)
+        Pull.rtmp.found(r, f, k, st, e, again)
+
+def Pull.rtmp.got(r: M.Read(), f: File, k: Sink, until: Nat, +st: Stat, o: E.Opts,
+  again: M.Sess -> File -> Sink -> Stat -> IO(String)) -> IO(String):
+  match r:
+    case Fail{+e}:
+      Pull.rtmp.lost(Stat.any(st) && Bool.not(E.Err.lasting(e)), e, f, k, until, st, o,
+        again)
     case Done{sf}:
       (s, tag) = sf
-      Pull.rtmp.put(Sink.put(k, tag), s, f, until, st, again)
+      Pull.rtmp.placed(Stat.tag(st, tag), k, s, f, until, again)
 
 # Tag after tag into the file, until the time is up.
-def Pull.rtmp.loop(fuel: Nat, s: M.Sess, f: File, k: Sink, +until: Nat, st: Stat) ->
-  IO(String):
+def Pull.rtmp.loop(fuel: Nat, s: M.Sess, f: File, k: Sink, +until: Nat, st: Stat,
+  +o: E.Opts) -> IO(String):
   match fuel:
     case 0n:
       Pull.end(M.Sess, s, f, M.Rtmp.close, Stat.show(st, "RTMP"))
     case 1n+p:
       do IO<String>:
         r : M.Read() <- M.Rtmp.next(s)
-        Pull.rtmp.got(r, f, k, until, st, s2 => f2 => k2 => st2 =>
-          Pull.rtmp.loop(p, s2, f2, k2, until, st2))
+        Pull.rtmp.got(r, f, k, until, st, o, s2 => f2 => k2 => st2 =>
+          Pull.rtmp.loop(p, s2, f2, k2, until, st2, o))
 
 def Pull.rtmp.file(r: Result<&1, &1, U32 & String, File>, s: M.Sess, k: Sink,
-  until: Nat) -> IO(String):
+  until: Nat, o: E.Opts) -> IO(String):
   match r:
     case Fail{e}:
       (_, msg) = e
@@ -243,22 +323,22 @@ def Pull.rtmp.file(r: Result<&1, &1, U32 & String, File>, s: M.Sess, k: Sink,
         M.Rtmp.close(s)
         IO.pure(String, "error: cannot write the file: " ++ msg)
     case Done{f}:
-      Pull.rtmp.loop(4000000000n, s, f, k, until, Stat{0, 0})
+      Pull.rtmp.loop(4000000000n, s, f, k, until, Stat{0, 0, 0, 0, 0, False{}}, o)
 
-def Pull.rtmp.opened(r: M.Opened(), +out: String, ms: U32) -> IO(String):
+def Pull.rtmp.opened(r: M.Opened(), +out: String, ms: U32, o: E.Opts) -> IO(String):
   match r:
     case Fail{e}:
-      IO.pure(String, Pull.error(e, Stat{0, 0}))
+      IO.pure(String, Pull.error(e, Stat{0, 0, 0, 0, 0, False{}}))
     case Done{s}:
       do IO<String>:
         now : Nat <- IO.now()
         f : Result<&1, &1, U32 & String, File> <- File.open(out, "w")
-        Pull.rtmp.file(f, s, Sink.for(out), Nat.add(now, U32.to_nat(ms)))
+        Pull.rtmp.file(f, s, Sink.for(out), Nat.add(now, U32.to_nat(ms)), o)
 
-def Pull.rtmp(o: E.Opts, out: String, ms: U32) -> IO(String):
+def Pull.rtmp(+o: E.Opts, out: String, ms: U32) -> IO(String):
   do IO<String>:
     r : M.Opened() <- M.Rtmp.open(o)
-    Pull.rtmp.opened(r, out, ms)
+    Pull.rtmp.opened(r, out, ms, o)
 
 # The command line
 # ----------------

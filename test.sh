@@ -53,11 +53,17 @@ authInternalUsers:
         path: hevc
       - action: read
         path: g711
+      - action: read
+        path: flap1
+      - action: read
+        path: flap2
 paths:
   open:
   priv:
   hevc:
   g711:
+  flap1:
+  flap2:
 Y
 "$MTX" "$T/mtx.yml" > "$T/mtx.log" 2>&1 &
 pids=$!
@@ -152,6 +158,34 @@ pull "rtsps: TLS, the CA given" rtsps://localhost:18322/open l.h264 h264
 pull "rtsps: TLS with a login" rtsps://cam:s3gredo@localhost:18322/priv m.h264 h264
 pull "rtmps: TLS, the CA given" rtmps://localhost:11936/open n.flv h264
 unset STREAM_CAFILE
+
+# A stream lost and found: the publishers of two paths are killed 3 s
+# into a 12 s recording and started again 3 s later. Each recording goes
+# on in the same file, says it reconnected, and the file still decodes.
+flap() {
+  ffmpeg $SRC $X264 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:18554/flap1 > /dev/null 2>&1 &
+  f1=$!
+  ffmpeg $SRC $X264 -f flv rtmp://127.0.0.1:11935/flap2 > /dev/null 2>&1 &
+  f2=$!
+  pids="$pids $f1 $f2"
+}
+flap
+sleep 3
+"$T/pull" rtsp://127.0.0.1:18554/flap1 "$T/y.ts" 12 > "$T/y.out" 2>&1 &
+p1=$!
+"$T/pull" rtmp://127.0.0.1:11935/flap2 "$T/z.flv" 12 > "$T/z.out" 2>&1 &
+p2=$!
+sleep 3; kill $f1 $f2; sleep 3; flap
+wait $p1 $p2
+for f in y.ts z.flv; do
+  out=$(tail -1 "$T/${f%.*}.out")
+  n=$(ffprobe -v error -count_frames -select_streams v -show_entries stream=nb_read_frames -of csv=p=0 "$T/$f" 2>/dev/null | head -1)
+  errs=$(ffmpeg -v error -i "$T/$f" -f null - 2>&1 | grep -v -c -i "non-existing\|no frame\|missing reference\|Could not find ref")
+  case "$out" in
+    ok:*reconnected*) [ "${n:-0}" -gt 100 ] && [ "$errs" = "0" ] && ok "reconnects: $f ($n frames)" || bad "reconnects: $f: $n frames, $errs decode errors" ;;
+    *) bad "reconnects: $f: $out" ;;
+  esac
+done
 
 # OTHERS=1: the same RTMP pull from two other servers, in Docker.
 if [ -n "$OTHERS" ]; then

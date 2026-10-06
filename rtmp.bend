@@ -201,6 +201,40 @@ def Rtmp.open(o: E.Opts) -> IO(Opened()):
     r : Fin() <- Rtmp.start(o)
     IO.pure(Opened(), Rtmp.open.end(r))
 
+def Rtmp.reopen.end(r: Opened(), rest: IO(Opened())) -> IO(Opened()):
+  match r:
+    case Done{s}:
+      IO.pure(Opened(), Done{s})
+    case Fail{+e}:
+      Bool.pick(IO(Opened()), E.Err.lasting(e), IO.pure(Opened(), Fail{e}), rest)
+
+def Rtmp.reopen.go(late: Bool, o: E.Opts, rest: IO(Opened())) -> IO(Opened()):
+  match late:
+    case True{}:
+      IO.pure(Opened(), Fail{E.Err{E.Silent{}, 0, "the stream did not come back in time"}})
+    case False{}:
+      do IO<Opened()>:
+        r : Opened() <- Rtmp.open(o)
+        Rtmp.reopen.end(r, rest)
+
+def Rtmp.reopen.at(tries: Nat, +o: E.Opts, +until: Nat, +delay: U32) -> IO(Opened()):
+  match tries:
+    case 0n:
+      IO.pure(Opened(), Fail{E.Err{E.Silent{}, 0, "the stream did not come back"}})
+    case 1n+p:
+      rest = Rtmp.reopen.at(p, o, until, U32.min((delay * 2 : U32), 15000))
+      do IO<Opened()>:
+        u : Unit <- IO.sleep(delay)
+        now : Nat <- IO.now()
+        Rtmp.reopen.go(Nat.is_le(until, now), o, rest)
+
+# Open again a session that was lost: it waits half a second, tries,
+# and doubles the wait (up to 15 s) after each failure, until the
+# session opens, an error says it never will (E.Err.lasting), or the
+# clock (IO.now's, ms) reaches until.
+def Rtmp.reopen(o: E.Opts, until: Nat) -> IO(Opened()):
+  Rtmp.reopen.at(100000n, o, until, 500)
+
 # The next tag, and the session to go on with. It waits for the server
 # at most the options' wait; on a failure (or at the stream's end, which
 # comes as the reason Ended) the connection is already closed.
