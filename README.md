@@ -1,6 +1,6 @@
 # bend-stream
 
-RTSP and RTMP clients written in [Bend 2](https://github.com/HigherOrderCO/Bend2). The protocols are all Bend; one C file, `net.c`, gives the sockets what Base's lack: hosts by name, TLS and reads with a deadline.
+RTSP and RTMP clients written in [Bend 2](https://github.com/bendlang/bend). The protocols are all Bend; one C file, `net.c`, gives the sockets what Base's lack: hosts by name, TLS and reads with a deadline.
 
 It is a library (a session gives frames, see below) and a recorder built on it:
 
@@ -29,7 +29,7 @@ ok: H264, 125 frames, 142543 bytes
 - RTP over the RTSP connection (interleaved TCP).
 - H.264 (RFC 6184: single units, STAP-A, FU-A) and H.265 (RFC 7798: single units, aggregation packets, fragmentation units).
 - Gives whole pictures (access units in Annex B form) and the audio's frames, each with its time: AAC (RFC 3640) with ADTS headers, or G.711 samples (PCMA and PCMU, what most cameras send).
-- The recorder writes them raw (`ffplay out.h264` plays it); to a file named `.ts`, as MPEG-TS with the AAC audio and the time of each frame, which is what a recording wants; or the audio alone, to `.aac`, `.alaw` or `.ulaw`.
+- The recorder writes them raw (`ffplay out.h264` plays it); to a file named `.ts`, as MPEG-TS with the AAC audio and the time of each frame; to `.flv`, with the time of each frame and the audio whatever it is, G.711 included; or the audio alone, to `.aac`, `.alaw` or `.ulaw`.
 
 **RTMP**
 
@@ -88,7 +88,7 @@ Those lines fetch the package from the Bend hub; the other files are under the s
 
 **Reconnecting**: `S.Rtsp.reopen(opts, until)` (and `M.Rtmp.reopen`) opens a session that was lost: it waits half a second, tries, doubles the wait up to 15 s after each failure, and ends when the session opens, when an error says it never will (`E.Err.lasting(e)`: the login, the certificate or the URL), or when the clock reaches `until`. The recorder uses it: a stream that drops goes on in the same file, its times set after the last frame written, and the result says `reconnected 2 times`.
 
-**Recording** (`rec.bend`): `W.Rec.for(path, info)` makes a recorder for the form the file's name asks for (`.ts`, or raw), and `W.Rec.put(rec, frame)` gives the bytes to write and the recorder to go on with.
+**Recording** (`rec.bend`): `W.Rec.for(path, info)` makes a recorder for the form the file's name asks for (`.ts`, `.flv`, the audio alone, or raw), and `W.Rec.put(rec, frame)` gives the bytes to write and the recorder to go on with.
 
 **RTMP** (`rtmp.bend`) is the same three calls, `M.Rtmp.open`, `M.Rtmp.next`, `M.Rtmp.close`, and gives tags (`K.Tag{typ, ts, data}`): written after `K.Flv.header()`, each as `K.Flv.of(tag)`, they are an FLV file. `V.Flv.frames(state, tag)` (`flv.bend`) takes the frame out of a tag, the same `F.Frame` an RTSP session gives, so an RTMP stream records to `.ts` too.
 
@@ -100,7 +100,7 @@ Those lines fetch the package from the Bend hub; the other files are under the s
 | `rtp.bend`, `depay.bend` | Pure: RTP packets, H.264 and H.265 units, Annex B; frames out of packets |
 | `frame.bend` | What a session gives: `Frame` and `Info` |
 | `rec.bend`, `ts.bend`, `audio.bend` | Pure: frames into a file (raw, MPEG-TS: PAT, PMT, PES, the clock), AAC with ADTS headers |
-| `flv.bend` | Pure: frames out of RTMP's tags (AVC and AAC as FLV holds them) |
+| `flv.bend`, `flvw.bend` | Pure: frames out of RTMP's tags, and frames into an FLV file (H.264, H.265, AAC and G.711 as FLV holds them) |
 | `rtmp_core.bend` | Pure: handshake, chunks, commands, what a message means, FLV |
 | `amf.bend` | Pure: AMF0 |
 | `bytes.bend`, `text.bend`, `b64.bend`, `md5.bend`, `sha256.bend` | Pure helpers |
@@ -113,14 +113,24 @@ Those lines fetch the package from the Bend hub; the other files are under the s
 
 ## Laws
 
-`bend PROOF.bend` prints `ALL PROOFS CHECK` only while every law in [`LAWS.bend`](LAWS.bend) holds. Among them:
+`bend PROOF.bend` prints `ALL PROOFS CHECK` only while every law in [`LAWS.bend`](LAWS.bend) holds. Some hold for every input:
 
 - no piece of an RTSP request carries a CR or LF, for every string, so a URL or a header value cannot start another header or request (by induction);
+- the joining of byte lists every buffer is built with is the plain joining of lists, for every two lists (by induction);
+- a TS that announced no audio never carries an audio packet, an audio file takes nothing of a picture, and a raw video file takes no audio, whatever the state and the frame;
+- what is not an RTP packet, or a tag that is neither audio nor video, gives no frame and changes nothing;
+- no reason to fail is both one that lasts and one worth another try.
+
+The others are the standards' own examples, checked by the compiler:
+
+
 - the Digest answer is the example of RFC 2617 3.5, and those of RFC 7616 3.9.1 over SHA-256 and MD5; SHA-256 itself gives the vectors of FIPS 180-4; Basic is the example of RFC 7617;
 - an H.264 unit split in FU-A fragments comes out whole, and a fragment whose start was lost gives nothing;
 - AMF0 numbers are the right IEEE 754 doubles, and a field of a status object is found after a round trip;
 - an FLV tag has the bytes the format says, and the frames come out of tags as they should: H.264, H.265 as enhanced RTMP carries it, G.711;
 - the PAT is byte for byte the one every muxer writes, CRC included, and a PES packet of any size comes out in whole 188-byte packets.
+
+`bend PROOF.bend --verdict` rechecks proofs with Bend's small kernel, itself proven in Lean. Taken one at a time, 29 of the 30 laws pass it; the Digest example over SHA-256 ends in "a mismatch between the TypeScript implementation and the formalized kernel" (Bend 2.0.35), which says nothing either way about the law.
 
 ## Tests
 
@@ -134,7 +144,7 @@ Beyond the script, the RTSP client was run against real recorders, into MPEG-TS:
 
 ## Limits
 
-- RTSP: only RTP over the RTSP connection (no UDP). G.711 audio is given as frames and recorded alone, but has no place in a TS.
+- RTSP: only RTP over the RTSP connection (no UDP). G.711 has no place in a TS: a camera with it records whole into `.flv`.
 - Sound and picture are lined up by their first packets, not by RTCP sender reports.
 - RTMP: playing only, no publishing. A missing login shows as "the server closed the connection".
 - The TS takes the RTP timestamp for both the presentation and the decoding time, which is wrong for a stream with B-frames (cameras rarely make them).

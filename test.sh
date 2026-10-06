@@ -117,9 +117,9 @@ pull "rtsp: H.265 into MPEG-TS" rtsp://127.0.0.1:18554/hevc p.ts hevc
 pull "rtsp: with AAC into MPEG-TS, the video" rtsp://127.0.0.1:18554/open q.ts h264
 pull "rtsp: with AAC into MPEG-TS, the audio" rtsp://127.0.0.1:18554/open r.ts aac a
 # Sound and picture start together, within a fifth of a second.
-gap=$(ffprobe -v error -show_entries stream=start_time -of csv=p=0 "$T/r.ts" 2>/dev/null \
-  | sort -u | awk 'NR==1{a=$1} END{d=$1-a; if (d<0) d=-d; print (d<0.2) ? "ok" : d}')
-[ "$gap" = "ok" ] && ok "ts: audio and video start together" || bad "ts: streams start $gap s apart"
+start() { ffprobe -v error -select_streams "$1" -show_entries stream=start_time -of csv=p=0 "$T/r.ts" 2>/dev/null | grep -E '^[0-9.]+$' | head -1; }
+gap=$(echo "$(start v:0) $(start a:0)" | awk '{d=$1-$2; if (d<0) d=-d; print (NF==2 && d<0.2) ? "ok" : $0}')
+[ "$gap" = "ok" ] && ok "ts: audio and video start together" || bad "ts: video and audio start at: $gap"
 # The TS carries each picture's time: ffprobe reads the 25 pictures a
 # second the source makes, and the whole file decodes without a complaint.
 for f in o.ts p.ts; do
@@ -137,6 +137,16 @@ codec=$(ffprobe -v error -f alaw -ar 8000 -show_entries stream=codec_name -of cs
   && ok "rtsp: the audio alone, G.711 ($size bytes)" || bad "rtsp: G.711: $size bytes, $codec"
 streams=$(ffprobe -v error -show_entries stream=codec_type -of csv=p=0 "$T/w.ts" 2>/dev/null | grep -c audio)
 [ "$streams" = "0" ] && ok "ts: G.711 is left out of a TS" || bad "ts: $streams audio streams with G.711"
+# FLV out of frames: the one file with pictures, times and G.711 together.
+pull "rtsp: into FLV, the video" rtsp://127.0.0.1:18554/open ca.flv h264
+pull "rtsp: into FLV, the AAC audio" rtsp://127.0.0.1:18554/open cb.flv aac a
+pull "rtsp: with G.711 into FLV, the video" rtsp://127.0.0.1:18554/g711 cc.flv h264
+pull "rtsp: with G.711 into FLV, the audio" rtsp://127.0.0.1:18554/g711 cd.flv pcm_alaw a
+pull "rtsp: H.265 into FLV" rtsp://127.0.0.1:18554/hevc ce.flv hevc
+for f in ca.flv cc.flv ce.flv; do
+  errs=$(ffmpeg -v error -i "$T/$f" -f null - 2>&1 | grep -v -c -i "non-existing\|no frame\|missing reference\|Could not find ref\|RPS\|POC")
+  [ "$errs" = "0" ] && ok "flv: $f decodes" || bad "flv: $f: $errs decode errors"
+done
 # A server that sends the client elsewhere, and one that sends it in circles.
 python3 tests/redirect.py 18556 rtsp://127.0.0.1:18554/open > /dev/null 2>&1 &
 pids="$pids $!"

@@ -1,4 +1,4 @@
-# Frames into the bytes of a file, in one of three forms:
+# Frames into the bytes of a file, in one of four forms:
 #
 #   raw  the video's access units one after the other, the announced
 #        parameter sets first (.h264, .h265): what a decoder reads, with
@@ -7,11 +7,14 @@
 #        packet with its time (.ts). G.711 has no place in a TS and is
 #        left out.
 #   sound  the audio alone, as it comes: AAC with its ADTS headers is an
-#        .aac file, G.711 samples an .alaw or .ulaw one.
+#        .aac file, G.711 samples an .alaw or .ulaw one;
+#   FLV  pictures, their times and the audio, G.711 included (.flv):
+#        flvw.bend.
 import Base
 import ./bytes.bend as B
 import ./ts.bend as T
 import ./frame.bend as F
+import ./flvw.bend as X
 
 # sets: the parameter sets still to go in front of the first picture.
 # vcc, acc, tcc: the packet counters of the video, the audio and the
@@ -19,6 +22,7 @@ import ./frame.bend as F
 type Rec is Data:
   Raw{sets: List<&2, U32>}
   Snd{}
+  Fl{w: X.Fw}
   Ts{h265: Bool, audio: Bool, vcc: U32, acc: U32, tcc: U32, n: U32, sets: List<&2, U32>}
 
 # What a frame gave: bytes to write, and the state after.
@@ -36,10 +40,11 @@ def Rec.ends(+path: String, a: String, b: String, c: String) -> Bool:
 
 def Rec.named(+path: String, +i: F.Info) -> Rec:
   Bool.pick(Rec, String.ends_with(path, ".ts"), Rec.ts(i),
-    Bool.pick(Rec, Rec.ends(path, ".aac", ".alaw", ".ulaw"), Snd{}, Rec.raw(i)))
+    Bool.pick(Rec, String.ends_with(path, ".flv"), Fl{X.Fw.new(i)},
+      Bool.pick(Rec, Rec.ends(path, ".aac", ".alaw", ".ulaw"), Snd{}, Rec.raw(i))))
 
-# The form a file's name asks for: TS for .ts, the audio alone for
-# .aac, .alaw and .ulaw, the raw video for the rest.
+# The form a file's name asks for: TS for .ts, FLV for .flv, the audio
+# alone for .aac, .alaw and .ulaw, the raw video for the rest.
 def Rec.for(path: String, i: F.Info) -> Rec:
   Rec.named(String.to_lower(path), i)
 
@@ -59,6 +64,10 @@ def Rec.tables(yes: Bool, +tcc: U32, h265: Bool, audio: Bool) -> List<&2, U32>:
     case False{}:
       Nil{}
 
+def Rec.flv(p: X.Put) -> Wrote:
+  X.Put{bytes, w} = p
+  Wrote{bytes, Fl{w}}
+
 # A frame into the file. In a TS: the tables again every 30 pictures,
 # and everything 0.7 s after the clock the video carries.
 def Rec.put(r: Rec, f: F.Frame) -> Wrote:
@@ -67,6 +76,8 @@ def Rec.put(r: Rec, f: F.Frame) -> Wrote:
       Wrote{B.Bytes.cat(sets, data), Raw{Nil{}}}
     case Raw{sets} F.Audio{_, _}:
       Wrote{Nil{}, Raw{sets}}
+    case Fl{w} f:
+      Rec.flv(X.Fw.put(w, f))
     case Snd{} F.Video{_, _, _}:
       Wrote{Nil{}, Snd{}}
     case Snd{} F.Audio{_, data}:
