@@ -12,6 +12,8 @@ import ./audio.bend as U
 import ./opts.bend as E
 import ./flv.bend as V
 import ./frame.bend as F
+import ./depay.bend as D
+import ./rec.bend as W
 import ./LAWS.bend as Laws
 
 # One cleaned char on a clean rest: a newline is dropped, any other
@@ -87,7 +89,10 @@ def Laws.give_up_only_on_what_lasts():
 def Laws.sha256_vectors():
   {==}
 
-def Laws.digest_rfc7616():
+def Laws.digest_rfc7616_sha256():
+  {==}
+
+def Laws.digest_rfc7616_md5():
   {==}
 
 def Laws.flv_hevc():
@@ -97,4 +102,58 @@ def Laws.flv_avc():
   {==}
 
 def Laws.flv_g711():
+  {==}
+
+# What is left of a list reversed onto another and then onto a third:
+# the second reversed onto the first joined to the third.
+def Lemma.onto(a: List<&2, U32>, b: List<&2, U32>, c: List<&2, U32>) ->
+  {B.Bytes.onto(B.Bytes.onto(a, b), c) == B.Bytes.onto(b, List.append(&2, U32, a, c))
+    : List<&2, U32>}:
+  match a:
+    case Nil{}:
+      {==}
+    case Con{+x, +t}:
+      Lemma.onto(t, x <> b, c)
+
+def Laws.cat_is_append(a, b):
+  Lemma.onto(a, Nil{}, b)
+
+def Laws.lasting_never_again(w):
+  match w:
+    case E.NoRoute{}:
+      {==}
+    case E.Unsafe{}:
+      {==}
+    case E.NoLogin{}:
+      {==}
+    case E.NoStream{}:
+      {==}
+    case E.Silent{}:
+      {==}
+    case E.Hangup{}:
+      {==}
+    case E.Refused{}:
+      {==}
+    case E.Garbled{}:
+      {==}
+    case E.BadUrl{}:
+      {==}
+    case E.Ended{}:
+      {==}
+    case E.Moved{}:
+      {==}
+
+def Laws.no_rtp_no_frame(pt, sound, m):
+  {==}
+
+def Laws.data_tag_no_frame(st, ts, data):
+  {==}
+
+def Laws.sound_file(pts, key, data):
+  {==}
+
+def Laws.raw_file_no_audio(sets, pts, data):
+  {==}
+
+def Laws.ts_no_audio_unless_announced(h265, vcc, acc, tcc, n, sets, pts, data):
   {==}

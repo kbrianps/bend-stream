@@ -14,6 +14,8 @@ import ./audio.bend as U
 import ./opts.bend as E
 import ./flv.bend as V
 import ./frame.bend as F
+import ./depay.bend as D
+import ./rec.bend as W
 
 def Laws.nals(o: R.Out) -> List<&2, List<&2, U32>>:
   R.Out{n, _} = o
@@ -33,6 +35,10 @@ def Laws.tag(o: V.Out) -> List<&2, F.Frame>:
 def Laws.flv(o: V.Out) -> V.Flv:
   V.Out{_, st} = o
   st
+
+def Laws.wrote(w: W.Wrote) -> List<&2, U32>:
+  W.Wrote{bs, _} = w
+  bs
 
 def Laws.state(o: R.Out) -> R.Dep:
   R.Out{_, s} = o
@@ -60,17 +66,19 @@ law sha256_vectors:
       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"]
     : List<&2, String>}
 
-# LAW: the Digest answers of RFC 7616 3.9.1, the same exchange over
-# SHA-256 and over MD5.
-law digest_rfc7616:
-  {[C.Auth.response("Mufasa", "http-auth@example.org", "Circle of Life", "GET",
-      "/dir/index.html", "7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v", True{},
-      "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ", True{}),
-    C.Auth.response("Mufasa", "http-auth@example.org", "Circle of Life", "GET",
-      "/dir/index.html", "7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v", True{},
-      "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ", False{})]
-    == ["753927fa0e85d155564e2e272a28d1802ca10daf4496794697cf8db5856cb6c1",
-      "8ca523f5e9506fed4657c9700eebdbec"] : List<&2, String>}
+# LAW: the Digest answer of RFC 7616 3.9.1 over SHA-256.
+law digest_rfc7616_sha256:
+  {C.Auth.response("Mufasa", "http-auth@example.org", "Circle of Life", "GET",
+    "/dir/index.html", "7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v", True{},
+    "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ", True{})
+    == "753927fa0e85d155564e2e272a28d1802ca10daf4496794697cf8db5856cb6c1" : String}
+
+# LAW: the same exchange over MD5, as the RFC gives it.
+law digest_rfc7616_md5:
+  {C.Auth.response("Mufasa", "http-auth@example.org", "Circle of Life", "GET",
+    "/dir/index.html", "7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v", True{},
+    "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ", False{})
+    == "8ca523f5e9506fed4657c9700eebdbec" : String}
 
 # LAW: Basic is the example of RFC 7617 2.
 law basic_rfc7617:
@@ -223,3 +231,66 @@ law flv_g711:
   {[Laws.tag(V.Flv.frames(V.Flv.new(), K.Tag{8, 0, [114, 213, 85]})),
     Laws.tag(V.Flv.frames(V.Flv.new(), K.Tag{8, 0, [130, 255]}))]
     == [[F.Audio{0, [213, 85]}], [F.Audio{0, [255]}]] : List<&2, List<&2, F.Frame>>}
+
+# For every input
+# ---------------
+# The laws above are examples: one input, the answer the standard gives.
+# These hold for every value of what they name.
+
+# LAW: the joining of two byte lists that every buffer here is built
+# with (it walks the first list twice, in constant stack) is the plain
+# joining of lists, for every two lists.
+law cat_is_append:
+  for a: List<&2, U32>
+  for b: List<&2, U32>
+  {B.Bytes.cat(a, b) == List.append(&2, U32, a, b) : List<&2, U32>}
+
+# LAW: no reason to fail both lasts and is worth another try.
+law lasting_never_again:
+  for w: E.Why
+  {Bool.and(E.Why.lasting(w), E.Why.again(w)) == False{} : Bool}
+
+# LAW: what is not an RTP packet completes no frame and changes nothing,
+# whatever the state.
+law no_rtp_no_frame:
+  for pt: U32
+  for sound: Bool
+  for m: D.Asm
+  {D.Asm.packet(R.NoRtp{}, pt, sound, m) == D.Got{Nil{}, m} : D.Got}
+
+# LAW: a tag that is neither audio nor video holds no frame and changes
+# nothing, whatever the state.
+law data_tag_no_frame:
+  for st: V.Flv
+  for ts: U32
+  for data: List<&2, U32>
+  {V.Flv.frames(st, K.Tag{18, ts, data}) == V.Out{Nil{}, st} : V.Out}
+
+# LAW: an audio file takes the audio as it comes and nothing of a picture.
+law sound_file:
+  for pts: U32
+  for key: Bool
+  for data: List<&2, U32>
+  {[W.Rec.put(W.Snd{}, F.Audio{pts, data}), W.Rec.put(W.Snd{}, F.Video{pts, key, data})]
+    == [W.Wrote{data, W.Snd{}}, W.Wrote{Nil{}, W.Snd{}}] : List<&2, W.Wrote>}
+
+# LAW: a raw video file takes no audio, whatever is still to be written.
+law raw_file_no_audio:
+  for sets: List<&2, U32>
+  for pts: U32
+  for data: List<&2, U32>
+  {W.Rec.put(W.Raw{sets}, F.Audio{pts, data}) == W.Wrote{Nil{}, W.Raw{sets}} : W.Wrote}
+
+# LAW: a TS that announced no audio never carries an audio packet,
+# whatever its counters and whatever the frame.
+law ts_no_audio_unless_announced:
+  for h265: Bool
+  for vcc: U32
+  for acc: U32
+  for tcc: U32
+  for n: U32
+  for sets: List<&2, U32>
+  for pts: U32
+  for data: List<&2, U32>
+  {Laws.wrote(W.Rec.put(W.Ts{h265, False{}, vcc, acc, tcc, n, sets}, F.Audio{pts, data}))
+    == Nil{} : List<&2, U32>}

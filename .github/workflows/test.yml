@@ -1,0 +1,36 @@
+name: test
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bend
+        run: |
+          curl -fsSL https://bend-lang.com/install.sh | sh
+          echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
+
+      - name: Install ffmpeg and mediamtx
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ffmpeg
+          curl -fsSL https://github.com/bluenviron/mediamtx/releases/download/v1.9.3/mediamtx_v1.9.3_linux_amd64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin mediamtx
+
+      - name: Versions
+        run: |
+          bend version
+          clang --version | head -1
+          ffmpeg -version | head -1
+          mediamtx --version
+
+      # The laws, a native build, and both clients against a local server.
+      - name: Test
+        run: ./test.sh
