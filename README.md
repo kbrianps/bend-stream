@@ -1,6 +1,6 @@
 # bend-stream
 
-[Português](README.pt-BR.md)
+[Português](README.pt-BR.md) · [![test](https://github.com/kbrianps/bend-stream/actions/workflows/test.yml/badge.svg)](https://github.com/kbrianps/bend-stream/actions/workflows/test.yml)
 
 RTSP and RTMP clients written in [Bend 2](https://github.com/bendlang/bend). The protocols are all Bend; one C file, `net.c`, gives the sockets what Base's lack: hosts by name, TLS and reads with a deadline.
 
@@ -45,9 +45,9 @@ ok: H264+PCMA, 125 frames, 142543 bytes
 A session gives frames; what to do with them is the program's business. Bend's functions cannot be called twice, so there is no callback: the program asks for the next frame, as with `av_read_frame`.
 
 ```python
-import 0xd6fc55bf65b187fec4175f80d08c165a/rtsp.bend as S
-import 0xd6fc55bf65b187fec4175f80d08c165a/opts.bend as E
-import 0xd6fc55bf65b187fec4175f80d08c165a/frame.bend as F
+import 0x549ec15ed24ab103abe18a252f491fa4/rtsp.bend as S
+import 0x549ec15ed24ab103abe18a252f491fa4/opts.bend as E
+import 0x549ec15ed24ab103abe18a252f491fa4/frame.bend as F
 
 # open: connect, log in, set the streams up, play
 r : S.Opened() <- S.Rtsp.open(E.Opts.new("rtsp://user:pass@camera/stream"))
