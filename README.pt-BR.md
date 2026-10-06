@@ -141,7 +141,7 @@ As outras são os exemplos das próprias normas, conferidos pelo compilador:
 
 Prova as leis, compila o binário, sobe um [mediamtx](https://github.com/bluenviron/mediamtx) local alimentado pelo `ffmpeg`, grava dele pelos dois protocolos e confere cada arquivo com o `ffprobe`. Cobre também TLS, com um certificado criado na hora. Precisa de `mediamtx`, `ffmpeg`, `ffprobe`, `openssl` e `python3` (um servidor que só redireciona). `AUTH=basic ./test.sh` roda com Basic no lugar de Digest, e `OTHERS=1 ./test.sh` acrescenta, em Docker, RTMP a partir do SRS e do nginx-rtmp, e H.265 e G.711 por RTMP a partir de um mediamtx recente.
 
-Além do script, o cliente RTSP rodou contra gravadores reais, em MPEG-TS: um DVR Intelbras MHDX e um NVR Hikvision DS-7632NXI-K2 em H.264, e uma câmera em H.265 com áudio G.711 (PCMU).
+Além do script, o cliente RTSP rodou contra gravadores reais, em MPEG-TS: um DVR Intelbras MHDX e um NVR Hikvision DS-7632NXI-K2 em H.264, e uma câmera em H.265 com áudio G.711 (PCMU), que também gravou inteira (imagem e som) em FLV.
 
 ## Limites
 
