@@ -692,6 +692,20 @@ def Rtsp.control(+base: String, +control: String) -> String:
 def Rtsp.session(v: String) -> String:
   String.trim(Rtsp.word(String.split(v, ';'), 0n))
 
+def Rtsp.timeout.of(ps: List<&2, String>) -> U32:
+  match ps:
+    case Nil{}:
+      60
+    case Con{+p, t}:
+      +kv = String.to_lower(String.trim(p))
+      Bool.pick(U32, String.starts_with(kv, "timeout="),
+        U32.max(Rtsp.num(U32.read(String.drop(kv, 8n))), 2), Rtsp.timeout.of(t))
+
+# The seconds a Session header gives the session without a request
+# ("id;timeout=30"); 60 when it says nothing (RFC 2326 12.37).
+def Rtsp.timeout(v: String) -> U32:
+  Rtsp.timeout.of(String.split(v, ';'))
+
 def Rtsp.signed.with(+auth: String, method: String, uri: String, cseq: U32,
   +session: String, hs: List<&2, Hdr>) -> String:
   Rtsp.request(method, uri, cseq, List.append(&2, Hdr, hs,

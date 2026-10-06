@@ -1,8 +1,11 @@
 # Record a camera or a stream into a file.
 #
-#   bend pull.bend -- rtsp://user:pass@192.168.0.10:554/stream out.h264 10
-#   bend pull.bend -- rtmp://192.168.0.20/live/cam out.flv 10
+#   bend pull.bend -o pull
+#   ./pull rtsp://user:pass@camera.example:554/stream out.h264 10
+#   ./pull rtmp://192.168.0.20/live/cam out.flv 10
 #
+# It runs as a native binary only: the sockets are in net.c. rtsps://
+# and rtmps:// are the same under TLS.
 # RTSP gives the video's raw stream (.h264 or .h265); RTMP gives an FLV
 # with what the server sends. The last argument is how many seconds to
 # record (10 when left out).
@@ -46,12 +49,12 @@ def Pull.run(args: List<&2, String>) -> IO(Unit):
   match args:
     case Con{_, Con{+url, Con{out, rest}}}:
       do IO<Unit>:
-        r : N.Out() <- Pull.by(String.starts_with(String.to_lower(url), "rtmp://"), url,
+        r : N.Out() <- Pull.by(String.starts_with(String.to_lower(url), "rtmp"), url,
           out, (Pull.secs(rest) * 1000 : U32))
         IO.print(Pull.show(r))
     case _:
-      IO.print("usage: bend pull.bend -- rtsp://[user:pass@]IP[:port]/path OUT [SECONDS]\n"
-        ++ "       bend pull.bend -- rtmp://IP[:port]/app/stream OUT [SECONDS]")
+      IO.print("usage: pull rtsp[s]://[user:pass@]host[:port]/path OUT [SECONDS]\n"
+        ++ "       pull rtmp[s]://host[:port]/app/stream OUT [SECONDS]")
 
 def main() -> IO(Unit):
   do IO<Unit>:

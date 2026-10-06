@@ -11,38 +11,16 @@
 # ffmpeg or a player reads the file. This file is the IO; the bytes and
 # their meaning are in rtmp_core.bend and amf.bend, which are pure.
 #
-# Over Base's TCP only: the host is an IPv4 address, and there is no
-# TLS (no rtmps). A login goes in the URL's query, as servers that use
-# one expect (rtmp://host/app?user=...&pass=...).
+# The sockets are net.c's (see conn.bend): the host may be a name,
+# rtmps:// is RTMP under TLS, and a server silent for 10 seconds ends
+# the pull. A login goes in the URL's query, as servers that use one
+# expect (rtmp://host/app?user=...&pass=...).
 import Base
 import ./bytes.bend as B
 import ./amf.bend as A
 import ./rtmp_core.bend as K
 import ./rtsp_core.bend as C
 import ./conn.bend as N
-
-def Rtmp.got.n(s: Socket, buf: List<&2, U32>, +piece: List<&2, U32>,
-  more: Socket -> List<&2, U32> -> U32 -> IO(N.Out())) -> IO(N.Out()):
-  more(s, B.Bytes.cat(buf, piece), B.Bytes.len(piece))
-
-def Rtmp.got(m: N.Recv(), buf: List<&2, U32>,
-  more: Socket -> List<&2, U32> -> U32 -> IO(N.Out())) -> IO(N.Out()):
-  (s, r) = m
-  match r:
-    case Fail{e}:
-      (code, msg) = e
-      N.Conn.fail(s, code, "recv: " ++ msg)
-    case Done{Nil{}}:
-      N.Conn.fail(s, 0, "the server closed the connection")
-    case Done{Con{h, t}}:
-      Rtmp.got.n(s, buf, h <> t, more)
-
-# More bytes onto the buffer, and how many came.
-def Rtmp.recv(s: Socket, buf: List<&2, U32>,
-  more: Socket -> List<&2, U32> -> U32 -> IO(N.Out())) -> IO(N.Out()):
-  do IO<N.Out()>:
-    m : N.Recv() <- TCP.recv_bytes(s, 65536)
-    Rtmp.got(m, buf, more)
 
 # The stream
 # ----------
@@ -58,10 +36,10 @@ def Rtmp.turn(up: Bool, due: Bool, buf: List<&2, U32>, s: Socket, f: File, +rx: 
     case True{} _:
       N.Conn.close(s, f, Done{p})
     case False{} True{}:
-      N.Conn.send(s, K.Rtmp.ack(rx), s2 => Rtmp.recv(s2, buf, s3 => b3 => n =>
+      N.Conn.send(s, K.Rtmp.ack(rx), s2 => N.Conn.recv.n(s2, buf, s3 => b3 => n =>
         again(b3, s3, f, U32.add(rx, n), rx, p)))
     case False{} False{}:
-      Rtmp.recv(s, buf, s3 => b3 => n => again(b3, s3, f, U32.add(rx, n), acked, p))
+      N.Conn.recv.n(s, buf, s3 => b3 => n => again(b3, s3, f, U32.add(rx, n), acked, p))
 
 # The loop: a media message into the file as a tag, a ping answered,
 # the rest passed over. rx: the bytes received; acked: at the last
@@ -173,30 +151,25 @@ def Rtmp.shaking(fuel: Nat, h: K.Shake, buf: List<&2, U32>, s: Socket, +u: C.Url
           s3 => st3 => b3 => _ => Rtmp.connected(s3, st3, b3, K.Where.stream(w), path,
             ms)))
 
-def Rtmp.hello(r: Result<&1, &1, U32 & String, Socket>, seed: U32, +u: C.Url,
-  path: String, ms: U32) -> IO(N.Out()):
-  match r:
-    case Fail{e}:
-      (code, msg) = e
-      IO.pure(N.Out(), Fail{(code, "connect: " ++ msg)})
-    case Done{s}:
-      N.Conn.send(s, K.Rtmp.hello(seed), s2 => Rtmp.shaking(4096n, K.Early{}, Nil{}, s2,
-        u, K.Where.of(C.Url.path(u)), path, ms))
-
-def Rtmp.go(bad: Bool, +u: C.Url, path: String, ms: U32) -> IO(N.Out()):
+def Rtmp.go(bad: Bool, +u: C.Url, path: String, ms: U32, tls: Bool) -> IO(N.Out()):
   match bad:
     case True{}:
       IO.pure(N.Out(), Fail{(0, "not an RTMP URL (rtmp://host[:port]/app/stream)")})
     case False{}:
       do IO<N.Out()>:
         seed : U32 <- IO.try(U32, IO.random_u32())
-        r : Result<&1, &1, U32 & String, Socket> <- TCP.connect(C.Url.host.of(u),
-          C.Url.port.of(u))
-        Rtmp.hello(r, seed, u, path, ms)
+        N.Conn.open(C.Url.host.of(u), C.Url.port.of(u), tls, s =>
+          N.Conn.send(s, K.Rtmp.hello(seed), s2 => Rtmp.shaking(4096n, K.Early{}, Nil{},
+            s2, u, K.Where.of(C.Url.path(u)), path, ms)))
 
-def Rtmp.pull.url(+u: C.Url, path: String, ms: U32) -> IO(N.Out()):
-  Rtmp.go(String.is_empty(C.Url.host.of(u)), u, path, ms)
+def Rtmp.pull.url(+u: C.Url, path: String, ms: U32, tls: Bool) -> IO(N.Out()):
+  Rtmp.go(String.is_empty(C.Url.host.of(u)), u, path, ms, tls)
 
-# Play the stream of an RTMP URL into an FLV file for ms milliseconds.
-def Rtmp.pull(url: String, path: String, ms: U32) -> IO(N.Out()):
-  Rtmp.pull.url(C.Url.of(url, "rtmp://", 1935), path, ms)
+def Rtmp.pull.tls(+tls: Bool, url: String, path: String, ms: U32) -> IO(N.Out()):
+  Rtmp.pull.url(C.Url.of(url, Bool.pick(String, tls, "rtmps://", "rtmp://"),
+    Bool.pick(U32, tls, 443, 1935)), path, ms, tls)
+
+# Play the stream of an RTMP URL (rtmp://, or rtmps:// for TLS) into an
+# FLV file for ms milliseconds.
+def Rtmp.pull(+url: String, path: String, ms: U32) -> IO(N.Out()):
+  Rtmp.pull.tls(String.starts_with(String.to_lower(url), "rtmps://"), url, path, ms)

@@ -13,9 +13,9 @@
 # file is the IO; what to say and what a reply means is in rtsp_core.bend
 # and rtp.bend, which are pure.
 #
-# Over Base's TCP only: the host is an IPv4 address (Base resolves no
-# names), there is no TLS (no rtsps), and a read has no timeout (a
-# server that goes silent is waited on).
+# The sockets are net.c's (see conn.bend): the host may be a name,
+# rtsps:// is RTSP under TLS, and a server silent for 10 seconds ends
+# the pull.
 import Base
 import ./bytes.bend as B
 import ./rtsp_core.bend as C
@@ -26,23 +26,27 @@ import ./conn.bend as N
 # stop (IO.now's clock, ms), and how to sign a request.
 type Cfg is Data:
   Cfg{h265: Bool, pt: U32, until: Nat, uri: String, session: String, chal: C.Chal,
-    user: String, pass: String, cnonce: String, codec: String}
+    user: String, pass: String, cnonce: String, codec: String, every: Nat}
 
 def Cfg.uri(c: Cfg) -> String:
-  Cfg{_, _, _, x, _, _, _, _, _, _} = c
+  Cfg{_, _, _, x, _, _, _, _, _, _, _} = c
   x
 
 def Cfg.until(c: Cfg) -> Nat:
-  Cfg{_, _, x, _, _, _, _, _, _, _} = c
+  Cfg{_, _, x, _, _, _, _, _, _, _, _} = c
+  x
+
+def Cfg.every(c: Cfg) -> Nat:
+  Cfg{_, _, _, _, _, _, _, _, _, _, x} = c
   x
 
 def Cfg.codec(c: Cfg) -> String:
-  Cfg{_, _, _, _, _, _, _, _, _, x} = c
+  Cfg{_, _, _, _, _, _, _, _, _, x, _} = c
   x
 
 # A request of this session, signed.
 def Cfg.request(c: Cfg, method: String, cseq: U32) -> String:
-  Cfg{_, _, _, +uri, session, chal, user, pass, cnonce, _} = c
+  Cfg{_, _, _, +uri, session, chal, user, pass, cnonce, _, _} = c
   C.Rtsp.signed(chal, user, pass, method, uri, cseq, cnonce, session, Nil{})
 
 # The connection
@@ -65,9 +69,7 @@ def Rtsp.reply(fuel: Nat, m: C.Msg, buf: List<&2, U32>, s: Socket,
 # Send a request and read its reply.
 def Rtsp.ask(s: Socket, +buf: List<&2, U32>, req: String,
   k: Socket -> List<&2, U32> -> C.Resp -> IO(N.Out())) -> IO(N.Out()):
-  do IO<N.Out()>:
-    m : N.Sent() <- TCP.send(s, req)
-    N.Conn.sent(m, s2 => Rtsp.reply(4096n, C.Rtsp.demux(buf), buf, s2, k))
+  N.Conn.say(s, req, s2 => Rtsp.reply(4096n, C.Rtsp.demux(buf), buf, s2, k))
 
 # The stream
 # ----------
@@ -99,24 +101,12 @@ def Rtsp.units(video: Bool, data: List<&2, U32>, h265: Bool, pt: U32, st: R.Dep)
       R.Out{Nil{}, st}
 
 def Cfg.units(c: Cfg, chan: U32, data: List<&2, U32>, st: R.Dep) -> R.Out:
-  Cfg{h265, pt, _, _, _, _, _, _, _, _} = c
+  Cfg{h265, pt, _, _, _, _, _, _, _, _, _} = c
   Rtsp.units(U32.is_zero(chan), data, h265, pt, st)
-
-def Rtsp.closed(m: N.Sent(), f: File, r: N.Out()) -> IO(N.Out()):
-  (s, _) = m
-  do IO<N.Out()>:
-    File.close(f)
-    Socket.close(s)
-    IO.pure(N.Out(), r)
 
 # TEARDOWN (its reply is not waited for), then both ends closed.
 def Rtsp.finish(s: Socket, f: File, c: Cfg, cseq: U32, r: N.Out()) -> IO(N.Out()):
-  do IO<N.Out()>:
-    m : N.Sent() <- TCP.send(s, Cfg.request(c, "TEARDOWN", cseq))
-    Rtsp.closed(m, f, r)
-
-def Rtsp.alive(m: N.Sent(), k: Socket -> IO(N.Out())) -> IO(N.Out()):
-  N.Conn.sent(m, k)
+  N.Conn.bye(s, Cfg.request(c, "TEARDOWN", cseq), f, r)
 
 def Rtsp.frame(o: R.Out, s: Socket, f: File, p: N.Pulled,
   k: Socket -> File -> R.Dep -> N.Pulled -> IO(N.Out())) -> IO(N.Out()):
@@ -126,24 +116,22 @@ def Rtsp.frame(o: R.Out, s: Socket, f: File, p: N.Pulled,
     N.Pulled.add(p, U32.from_nat(List.length(&2, List<&2, U32>, nals)), B.Bytes.len(bs))))
 
 # With nothing left in the buffer: stop when the time is up; else, a
-# keep-alive when one is due (every 25 s; servers time a session out at
-# 60 by default, RFC 2326 12.37), and more bytes.
+# keep-alive when one is due (at half the session's timeout), and more
+# bytes.
 def Rtsp.wait(up: Bool, due: Bool, s: Socket, f: File, +c: Cfg, +cseq: U32,
   p: N.Pulled, more: Socket -> File -> Bool -> N.Pulled -> IO(N.Out())) -> IO(N.Out()):
   match up due:
     case True{} _:
       Rtsp.finish(s, f, c, cseq, Done{p})
     case False{} True{}:
-      do IO<N.Out()>:
-        m : N.Sent() <- TCP.send(s, Cfg.request(c, "GET_PARAMETER", cseq))
-        Rtsp.alive(m, s2 => more(s2, f, True{}, p))
+      N.Conn.say(s, Cfg.request(c, "GET_PARAMETER", cseq), s2 => more(s2, f, True{}, p))
     case False{} False{}:
       more(s, f, False{}, p)
 
-def Rtsp.pinged(yes: Bool, +now: Nat, ka: Nat) -> Nat:
+def Rtsp.pinged(yes: Bool, +now: Nat, ka: Nat, every: Nat) -> Nat:
   match yes:
     case True{}:
-      Nat.add(now, 25000n)
+      Nat.add(now, every)
     case False{}:
       ka
 
@@ -154,7 +142,7 @@ def Rtsp.turn(+now: Nat, buf: List<&2, U32>, s: Socket, f: File, +c: Cfg, +ka: N
   IO(N.Out()):
   Rtsp.wait(Nat.is_le(Cfg.until(c), now), Nat.is_le(ka, now), s, f, c, cseq, p,
     s2 => f2 => +pinged => p2 => N.Conn.recv(s2, buf, s3 => b3 =>
-      again(b3, s3, f2, Rtsp.pinged(pinged, now, ka),
+      again(b3, s3, f2, Rtsp.pinged(pinged, now, ka, Cfg.every(c)),
         U32.add(cseq, Bool.pick(U32, pinged, 1, 0)), p2)))
 
 # The loop: a packet off the buffer into the file, a reply (to a
@@ -189,7 +177,7 @@ def Rtsp.play.got(ok: Bool, r: C.Resp, s: Socket, +buf: List<&2, U32>, f: File,
   match ok:
     case True{}:
       Rtsp.loop(4000000000n, C.Rtsp.demux(buf), buf, s, f, R.Dep.new(), c,
-        Nat.add(now, 25000n), 5, N.Pulled{0, 0, head, Cfg.codec(c)})
+        Nat.add(now, Cfg.every(c)), 5, N.Pulled{0, 0, head, Cfg.codec(c)})
     case False{}:
       do IO<N.Out()>:
         File.close(f)
@@ -231,8 +219,9 @@ def Rtsp.setup.got(ok: Bool, +r: C.Resp, s: Socket, buf: List<&2, U32>,
       +pt = C.Media.pt(m)
       +session = C.Rtsp.session(C.Resp.get(r, "session"))
       +codec = C.Media.codec(m)
+      +every = U32.to_nat((C.Rtsp.timeout(C.Resp.get(r, "session")) * 500 : U32))
       Rtsp.start(s, buf, path, ms, until => Cfg{h265, pt, until, uri, session, chal,
-        C.Url.user(u), C.Url.pass(u), cnonce, codec},
+        C.Url.user(u), C.Url.pass(u), cnonce, codec, every},
         R.Nal.annexb(C.Sdp.sprops(C.Media.fmtp(m))))
     case False{}:
       N.Conn.fail(s, C.Resp.code(r), "SETUP was refused (the server may not do "
@@ -307,23 +296,14 @@ def Rtsp.first.got(ok: Bool, login: Bool, +r: C.Resp, s: Socket, buf: List<&2, U
       N.Conn.fail(s, C.Resp.code(r), "DESCRIBE was refused")
 
 # DESCRIBE with no login first: a 401 names the challenge to answer.
-def Rtsp.describe(s: Socket, path: String, ms: U32, +u: C.Url, +cnonce: String) ->
-  IO(N.Out()):
-  +uri = C.Url.show(u, "rtsp://")
+def Rtsp.describe(s: Socket, path: String, ms: U32, +u: C.Url, +cnonce: String,
+  tls: Bool) -> IO(N.Out()):
+  +uri = C.Url.show(u, Bool.pick(String, tls, "rtsps://", "rtsp://"))
   Rtsp.ask(s, Nil{}, Rtsp.describe.req(C.Chal.none(), u, uri, 1, cnonce),
     s2 => b2 => +r => Rtsp.first.got(U32.is_eq(C.Resp.code(r), 200),
       U32.is_eq(C.Resp.code(r), 401), r, s2, b2, path, ms, uri, u, cnonce))
 
-def Rtsp.connected(r: Result<&1, &1, U32 & String, Socket>, path: String, ms: U32,
-  u: C.Url, cnonce: String) -> IO(N.Out()):
-  match r:
-    case Fail{e}:
-      (code, msg) = e
-      IO.pure(N.Out(), Fail{(code, "connect: " ++ msg)})
-    case Done{s}:
-      Rtsp.describe(s, path, ms, u, cnonce)
-
-def Rtsp.go(bad: Bool, +u: C.Url, path: String, ms: U32) -> IO(N.Out()):
+def Rtsp.go(bad: Bool, +u: C.Url, path: String, ms: U32, +tls: Bool) -> IO(N.Out()):
   match bad:
     case True{}:
       IO.pure(N.Out(), Fail{(0, "not an RTSP URL (rtsp://[user:pass@]host[:port]/path)")})
@@ -331,14 +311,17 @@ def Rtsp.go(bad: Bool, +u: C.Url, path: String, ms: U32) -> IO(N.Out()):
       do IO<N.Out()>:
         a : U32 <- IO.try(U32, IO.random_u32())
         b : U32 <- IO.try(U32, IO.random_u32())
-        r : Result<&1, &1, U32 & String, Socket> <- TCP.connect(C.Url.host.of(u),
-          C.Url.port.of(u))
-        Rtsp.connected(r, path, ms, u, U32.show(a) ++ U32.show(b))
+        N.Conn.open(C.Url.host.of(u), C.Url.port.of(u), tls, s =>
+          Rtsp.describe(s, path, ms, u, U32.show(a) ++ U32.show(b), tls))
 
-def Rtsp.pull.url(+u: C.Url, path: String, ms: U32) -> IO(N.Out()):
-  Rtsp.go(String.is_empty(C.Url.host.of(u)), u, path, ms)
+def Rtsp.pull.url(+u: C.Url, path: String, ms: U32, tls: Bool) -> IO(N.Out()):
+  Rtsp.go(String.is_empty(C.Url.host.of(u)), u, path, ms, tls)
 
-# Pull the video of an RTSP URL into a file for ms milliseconds.
-def Rtsp.pull(url: String, path: String, ms: U32) -> IO(N.Out()):
-  Rtsp.pull.url(C.Url.of(url, "rtsp://", 554), path, ms)
+def Rtsp.pull.tls(+tls: Bool, url: String, path: String, ms: U32) -> IO(N.Out()):
+  Rtsp.pull.url(C.Url.of(url, Bool.pick(String, tls, "rtsps://", "rtsp://"),
+    Bool.pick(U32, tls, 322, 554)), path, ms, tls)
 
+# Pull the video of an RTSP URL (rtsp://, or rtsps:// for TLS) into a
+# file for ms milliseconds.
+def Rtsp.pull(+url: String, path: String, ms: U32) -> IO(N.Out()):
+  Rtsp.pull.tls(String.starts_with(String.to_lower(url), "rtsps://"), url, path, ms)

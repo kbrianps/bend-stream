@@ -1,13 +1,16 @@
 # bend-stream
 
-RTSP and RTMP clients written in [Bend 2](https://github.com/HigherOrderCO/Bend2), with no foreign code: only Bend and the TCP of its Base library.
+RTSP and RTMP clients written in [Bend 2](https://github.com/HigherOrderCO/Bend2). The protocols are all Bend; one C file, `net.c`, gives the sockets what Base's lack: hosts by name, TLS and reads with a deadline.
 
 It records a camera or a stream into a file:
 
 ```sh
-bend pull.bend -- rtsp://user:pass@192.168.0.10:554/stream out.h264 10
-bend pull.bend -- rtmp://192.168.0.20/live/cam out.flv 10
+bend pull.bend -o pull
+./pull rtsp://user:pass@camera.example:554/stream out.h264 10
+./pull rtmp://192.168.0.20/live/cam out.flv 10
 ```
+
+`rtsps://` and `rtmps://` are the same under TLS (OpenSSL's `libssl` is opened at run time). The certificate is checked against the host's name and the system's store, or against the PEM file that `STREAM_CAFILE` names.
 
 The last argument is how many seconds to record (10 when left out). The program prints what it did, or the error:
 
@@ -19,7 +22,7 @@ ok: H264, 144 packets, 520 units, 142543 bytes
 
 **RTSP** (RFC 2326)
 
-- `DESCRIBE`, `SETUP`, `PLAY`, `GET_PARAMETER` as keep-alive every 25 s, `TEARDOWN`.
+- `DESCRIBE`, `SETUP`, `PLAY`, `GET_PARAMETER` as keep-alive at half the session's timeout, `TEARDOWN`.
 - Basic and Digest (MD5) authentication, from the user and password in the URL.
 - SDP: picks the video stream and its control URL.
 - RTP over the RTSP connection (interleaved TCP).
@@ -57,6 +60,7 @@ The result is `Done{Pulled{packets, units, bytes, kind}}` or `Fail{(code, messag
 | `amf.bend` | Pure: AMF0 |
 | `bytes.bend`, `text.bend`, `b64.bend`, `md5.bend` | Pure helpers |
 | `rtsp.bend`, `rtmp.bend`, `conn.bend` | The IO: the two dialogs over a socket |
+| `net.bend`, `net.c`, `net.js` | The sockets: names, TLS, deadlines (native only; the JS side refuses) |
 | `pull.bend` | The command line |
 | `LAWS.bend`, `PROOF.bend` | The laws and their proofs |
 
@@ -76,18 +80,17 @@ The result is `Done{Pulled{packets, units, bytes, kind}}` or `Fail{(code, messag
 ./test.sh
 ```
 
-It proves the laws, starts a local [mediamtx](https://github.com/bluenviron/mediamtx) fed by `ffmpeg`, records from it over both protocols and checks each file with `ffprobe`. It needs `mediamtx`, `ffmpeg` and `ffprobe`. `AUTH=basic ./test.sh` runs it with Basic instead of Digest, and `OTHERS=1 ./test.sh` adds an RTMP pull from SRS and from nginx-rtmp (in Docker).
+It proves the laws, builds the binary, starts a local [mediamtx](https://github.com/bluenviron/mediamtx) fed by `ffmpeg`, records from it over both protocols and checks each file with `ffprobe`. It also covers TLS, with a certificate made on the spot. It needs `mediamtx`, `ffmpeg`, `ffprobe` and `openssl`. `AUTH=basic ./test.sh` runs it with Basic instead of Digest, and `OTHERS=1 ./test.sh` adds an RTMP pull from SRS and from nginx-rtmp (in Docker).
 
 Beyond the script, the RTSP client was run against real recorders: an Intelbras MHDX DVR and a Hikvision DS-7632NXI-K2 NVR in H.264, and a camera in H.265.
 
 ## Limits
 
-- The host must be an IPv4 address: Base's TCP resolves no names.
-- No TLS: no `rtsps://` or `rtmps://`.
 - RTSP: only RTP over the RTSP connection (no UDP), and only the video stream.
-- RTMP: playing only, no publishing. A missing stream or a missing login shows as "the server closed the connection".
+- RTMP: playing only, no publishing. A missing login shows as "the server closed the connection".
 - The FLV keeps the server's timestamps, so it may not start at zero.
-- A read has no timeout: a server that goes silent is waited on, and so is an RTMP server that holds a player until someone publishes (SRS and nginx-rtmp do). Base has no byte-safe read with a deadline, and no way to cancel one.
+- A server silent for 10 seconds ends the pull; there is no reconnection.
+- Native only: `bend pull.bend` alone runs the JS side, which has no sockets of this kind.
 - Bytes are linked lists in Bend: expect about 280 MB of memory for a 640x360 stream.
 
 Tested with Bend 2.0.35.
