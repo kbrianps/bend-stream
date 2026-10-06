@@ -131,7 +131,7 @@ As outras são os exemplos das próprias normas, conferidos pelo compilador:
 - um tag FLV tem os bytes que o formato manda, e os quadros saem dos tags como devem: H.264, H.265 como o enhanced RTMP carrega, G.711;
 - o PAT é byte a byte o que todo muxer escreve, com o CRC, e um pacote PES de qualquer tamanho sai em pacotes inteiros de 188 bytes.
 
-`bend PROOF.bend --verdict` reconfere as provas com o núcleo pequeno do Bend, que é provado em Lean. Uma por vez, 29 das 30 leis passam; o exemplo do Digest com SHA-256 termina em "a mismatch between the TypeScript implementation and the formalized kernel" (Bend 2.0.35), o que não diz nada sobre a lei, nem a favor nem contra.
+`bend PROOF.bend --verdict` reconfere as provas com o núcleo pequeno do Bend, que é provado em Lean. Uma por vez, 29 das 30 leis passam. O exemplo do Digest com SHA-256 não passa: o núcleo calcula passo a passo com um orçamento fixo e fica sem combustível num hash de vários blocos, o que o `--verdict` mostra como "mismatch" (Bend 2.0.35; o mesmo limite de [bendlang/bend#1193](https://github.com/bendlang/bend/issues/1193) e [#1322](https://github.com/bendlang/bend/issues/1322)). O compilador confere essa lei, e a mesma troca com MD5 passa no núcleo.
 
 ## Testes
 
