@@ -45,9 +45,9 @@ ok: H264+PCMA, 125 frames, 142543 bytes
 Uma sessão entrega quadros; o que fazer com eles é assunto do programa. Função em Bend não pode ser chamada duas vezes, então não há callback: o programa pede o próximo quadro, como no `av_read_frame`.
 
 ```python
-import 0x549ec15ed24ab103abe18a252f491fa4/rtsp.bend as S
-import 0x549ec15ed24ab103abe18a252f491fa4/opts.bend as E
-import 0x549ec15ed24ab103abe18a252f491fa4/frame.bend as F
+import 0x2355f41b6f5561f50104a75ccca27cf7/rtsp.bend as S
+import 0x2355f41b6f5561f50104a75ccca27cf7/opts.bend as E
+import 0x2355f41b6f5561f50104a75ccca27cf7/frame.bend as F
 
 # open: conecta, faz login, prepara os streams, dá play
 r : S.Opened() <- S.Rtsp.open(E.Opts.new("rtsp://usuario:senha@camera/stream"))

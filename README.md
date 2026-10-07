@@ -45,9 +45,9 @@ ok: H264+PCMA, 125 frames, 142543 bytes
 A session gives frames; what to do with them is the program's business. Bend's functions cannot be called twice, so there is no callback: the program asks for the next frame, as with `av_read_frame`.
 
 ```python
-import 0x549ec15ed24ab103abe18a252f491fa4/rtsp.bend as S
-import 0x549ec15ed24ab103abe18a252f491fa4/opts.bend as E
-import 0x549ec15ed24ab103abe18a252f491fa4/frame.bend as F
+import 0x2355f41b6f5561f50104a75ccca27cf7/rtsp.bend as S
+import 0x2355f41b6f5561f50104a75ccca27cf7/opts.bend as E
+import 0x2355f41b6f5561f50104a75ccca27cf7/frame.bend as F
 
 # open: connect, log in, set the streams up, play
 r : S.Opened() <- S.Rtsp.open(E.Opts.new("rtsp://user:pass@camera/stream"))
