@@ -155,7 +155,7 @@ Beyond the script, the RTSP client was run against real recorders, into MPEG-TS:
 - Native only: `bend pull.bend` alone runs the JS side, which has no sockets of this kind.
 - Bytes are linked lists in Bend: expect about 280 MB of memory for a 640x360 stream.
 
-Tested with Bend 2.0.35.
+Tested with Bend 2.0.36 (it needs 2.0.36 or later: effects register differently before).
 
 ## License
 

@@ -251,7 +251,7 @@ Term net_connect_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_connect_use(void) {
 #ifdef CID(Net.connect)
-  io_eff(CID(Net.connect), net_connect_run, 0);
+  io_eff(CID(Net.connect), net_connect_run);
 #endif
 }
 
@@ -369,7 +369,7 @@ Term net_tls_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_tls_use(void) {
 #ifdef CID(Net.tls)
-  io_eff(CID(Net.tls), net_tls_run, 0);
+  io_eff(CID(Net.tls), net_tls_run);
 #endif
 }
 
@@ -423,7 +423,7 @@ Term net_send_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_send_use(void) {
 #ifdef CID(Net.send)
-  io_eff(CID(Net.send), net_send_run, 0);
+  io_eff(CID(Net.send), net_send_run);
 #endif
 }
 
@@ -488,7 +488,7 @@ Term net_poll_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_poll_use(void) {
 #ifdef CID(Net.poll)
-  io_eff(CID(Net.poll), net_poll_run, 0);
+  io_eff(CID(Net.poll), net_poll_run);
 #endif
 }
 
@@ -509,6 +509,6 @@ Term net_close_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_close_use(void) {
 #ifdef CID(Net.close)
-  io_eff(CID(Net.close), net_close_run, 0);
+  io_eff(CID(Net.close), net_close_run);
 #endif
 }

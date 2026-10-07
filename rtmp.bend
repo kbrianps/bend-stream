@@ -78,7 +78,7 @@ def Rtmp.loop(fuel: Nat, e: K.Ev, +st: K.Dec, buf: List<&2, U32>, s: Socket, +wa
       Rtmp.loop(q, K.Rtmp.event(st2, rest), st2, rest, s, wait, rx, acked)
     case 1n+q K.Error{_, +st2, +rest}:
       Rtmp.loop(q, K.Rtmp.event(st2, rest), st2, rest, s, wait, rx, acked)
-    case 1n+q K.Wait{}:
+    case 1n+q K.Idle{}:
       Rtmp.more((U32.sub(rx, acked) >= 1000000 : U32), buf, s, wait, rx, acked,
         s3 => +b3 => +rx3 => +ack3 =>
           Rtmp.loop(q, K.Rtmp.event(st, b3), st, b3, s3, wait, rx3, ack3))
@@ -109,7 +109,7 @@ def Rtmp.await(fuel: Nat, e: K.Ev, +st: K.Dec, +buf: List<&2, U32>, s: Socket,
       Rtmp.await(p, K.Rtmp.event(st2, rest), st2, rest, s, wait, k)
     case 1n+p K.Media{_, _, _, +st2, +rest}:
       Rtmp.await(p, K.Rtmp.event(st2, rest), st2, rest, s, wait, k)
-    case 1n+p K.Wait{}:
+    case 1n+p K.Idle{}:
       N.Conn.recv(End, s, wait, buf, s2 => +b2 =>
         Rtmp.await(p, K.Rtmp.event(st, b2), st, b2, s2, wait, k))
 

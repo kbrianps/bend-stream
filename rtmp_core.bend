@@ -359,12 +359,12 @@ def Rtmp.chunk(st: Dec, buf: List<&2, U32>) -> Step:
 # What a player makes of it
 # -------------------------
 
-# Wait: more bytes are needed. Skip: nothing to act on. Result and
+# Idle: more bytes are needed. Skip: nothing to act on. Result and
 # Error answer a command. Start, Over and Refused are the stream's
 # status. Media is audio (8), video (9) or the metadata (18). Ping asks for a
 # pong with the same bytes.
 type Ev is Data:
-  Wait{}
+  Idle{}
   Skip{st: Dec, rest: List<&2, U32>}
   Result{ts: List<&2, A.Tok>, st: Dec, rest: List<&2, U32>}
   Error{msg: String, st: Dec, rest: List<&2, U32>}
@@ -455,7 +455,7 @@ def Ev.typed(media: Bool, data: Bool, cmd: Bool, user: Bool, typ: U32, ts: U32,
 def Ev.of(s: Step) -> Ev:
   match s:
     case More{}:
-      Wait{}
+      Idle{}
     case Part{st, rest}:
       Skip{st, rest}
     case Msg{+typ, ts, _, p, st, rest}:
